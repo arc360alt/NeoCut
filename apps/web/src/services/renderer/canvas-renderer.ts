@@ -22,6 +22,11 @@ export class CanvasRenderer {
 	width: number;
 	height: number;
 	fps: FrameRate;
+	/**
+	 * Longest side, in pixels, worth decoding video frames at. The preview
+	 * sets this from its on-screen size; null (export) means full resolution.
+	 */
+	sourceSizeLimit: number | null = null;
 
 	constructor({ width, height, fps }: CanvasRendererParams) {
 		this.width = width;
@@ -39,6 +44,15 @@ export class CanvasRenderer {
 			height: this.height,
 		});
 		return wasmCompositor.getCanvas();
+	}
+
+	/** Returns true when the limit changed and frames should be re-rendered. */
+	setSourceSizeLimit({ limit }: { limit: number | null }): boolean {
+		if (this.sourceSizeLimit === limit) {
+			return false;
+		}
+		this.sourceSizeLimit = limit;
+		return true;
 	}
 
 	setSize({ width, height }: { width: number; height: number }) {

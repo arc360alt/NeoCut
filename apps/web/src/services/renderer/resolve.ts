@@ -61,6 +61,12 @@ import type {
 	VisualNodeParams,
 } from "./nodes/visual-node";
 
+/**
+ * A blurred backdrop loses fine detail anyway, so the preview decodes it
+ * smaller than the main picture.
+ */
+const PREVIEW_BACKDROP_MAX_SIZE = 960;
+
 /** Keeps held frames inside the decoded range of the source. */
 const SOURCE_END_GUARD_SECONDS = 0.01;
 
@@ -289,6 +295,7 @@ async function resolveVideoNode({
 	const frame = await videoCache.getFrameAt({
 		mediaId: node.params.mediaId,
 		file: node.params.file,
+		maxSize: context.renderer.sourceSizeLimit ?? undefined,
 		time: mediaTimeToSeconds({ time: roundMediaTime({ time: sourceTimeTicks }) }),
 	});
 	if (!frame) {
@@ -514,7 +521,7 @@ async function resolveBlurBackgroundNode({
 		return null;
 	}
 
-	const backdropSource = await resolveBackdropSource({ node, clipTime });
+	const backdropSource = await resolveBackdropSource({ node, clipTime, context });
 	if (!backdropSource) {
 		return null;
 	}
@@ -539,9 +546,11 @@ async function resolveBlurBackgroundNode({
 async function resolveBackdropSource({
 	node,
 	clipTime,
+	context,
 }: {
 	node: BlurBackgroundNode;
 	clipTime: number;
+	context: ResolveContext;
 }): Promise<BackdropSource | null> {
 	if (node.params.mediaType === "video") {
 		const sourceTimeTicks =
@@ -553,6 +562,10 @@ async function resolveBackdropSource({
 		const frame = await videoCache.getFrameAt({
 			mediaId: node.params.mediaId,
 			file: node.params.file,
+			maxSize:
+				context.renderer.sourceSizeLimit === null
+					? undefined
+					: Math.min(context.renderer.sourceSizeLimit, PREVIEW_BACKDROP_MAX_SIZE),
 			time: mediaTimeToSeconds({ time: roundMediaTime({ time: sourceTimeTicks }) }),
 		});
 		if (!frame) {

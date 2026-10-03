@@ -10,6 +10,7 @@ import { CanvasRenderer } from "@/services/renderer/canvas-renderer";
 import { TICKS_PER_SECOND } from "@/wasm";
 import type { RootNode } from "@/services/renderer/nodes/root-node";
 import { buildScene } from "@/services/renderer/scene-builder";
+import { getPreviewSourceSizeLimit } from "@/preview/source-size";
 import { PreviewOverlayLayer } from "./overlay-layer";
 import { PreviewInteractionOverlay } from "./preview-interaction-overlay";
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu";
@@ -212,6 +213,19 @@ function PreviewCanvas({
 	}, [renderer, renderTree, editor.playback, editor.timeline]);
 
 	useRafLoop(render);
+
+	// Decoding frames larger than they appear on screen is the main cost of
+	// playback, so cap video decoding at the preview's displayed size.
+	useEffect(() => {
+		const limit = getPreviewSourceSizeLimit({
+			displayWidth: viewport.sceneWidth,
+			displayHeight: viewport.sceneHeight,
+			devicePixelRatio: window.devicePixelRatio,
+		});
+		if (renderer.setSourceSizeLimit({ limit })) {
+			lastFrameRef.current = -1;
+		}
+	}, [renderer, viewport.sceneWidth, viewport.sceneHeight]);
 
 	useEffect(() => {
 		const container = viewportRef.current;

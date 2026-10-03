@@ -1,0 +1,4 @@
+- Add silence detection feature and its popup and functionality
+- Fix any remaining preformance issues
+- Add any missing features from NyxVideo to this app
+- Find more stuff to add here.
