@@ -10,7 +10,11 @@ import {
 	FullScreenIcon,
 	PauseIcon,
 	PlayIcon,
+	VolumeHighIcon,
+	VolumeLowIcon,
+	VolumeMute02Icon,
 } from "@hugeicons/core-free-icons";
+import { Slider } from "@/components/ui/slider";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -36,6 +40,8 @@ export function PreviewToolbar({
 			<TimecodeDisplay />
 			<PlayPauseButton />
 			<div className="justify-self-end flex items-center gap-2.5">
+				<VolumeControl />
+				<Separator orientation="vertical" className="h-4" />
 				<ZoomSelect />
 				<Separator orientation="vertical" className="h-4" />
 				{/* v0.4.0 */}
@@ -142,5 +148,77 @@ function PlayPauseButton() {
 		>
 			<HugeiconsIcon icon={isPlaying ? PauseIcon : PlayIcon} />
 		</Button>
+	);
+}
+
+const VOLUME_STORAGE_KEY = "opencut:preview-volume";
+
+function readSavedVolume(): number | null {
+	try {
+		const saved = window.localStorage.getItem(VOLUME_STORAGE_KEY);
+		const volume = saved === null ? Number.NaN : Number(saved);
+		return Number.isFinite(volume) ? Math.min(1, Math.max(0, volume)) : null;
+	} catch {
+		return null;
+	}
+}
+
+function saveVolume({ volume }: { volume: number }): void {
+	try {
+		window.localStorage.setItem(VOLUME_STORAGE_KEY, String(volume));
+	} catch {
+		// Storage can be unavailable (private windows); the volume still applies.
+	}
+}
+
+/** Playback volume for the preview; it does not change the exported audio. */
+function VolumeControl() {
+	const editor = useEditor();
+	const volume = useEditor((e) => e.playback.getVolume());
+	const isMuted = useEditor((e) => e.playback.isMuted());
+
+	useEffect(() => {
+		const saved = readSavedVolume();
+		if (saved !== null) {
+			editor.playback.setVolume({ volume: saved });
+		}
+	}, [editor]);
+
+	const shownVolume = isMuted ? 0 : volume;
+	const icon =
+		shownVolume === 0
+			? VolumeMute02Icon
+			: shownVolume < 0.5
+				? VolumeLowIcon
+				: VolumeHighIcon;
+
+	return (
+		<div className="flex items-center gap-2">
+			<Button
+				variant="text"
+				size="icon"
+				aria-label={isMuted ? "Unmute preview" : "Mute preview"}
+				title={isMuted ? "Unmute" : "Mute"}
+				onClick={() => {
+					editor.playback.toggleMute();
+					saveVolume({ volume: editor.playback.getVolume() });
+				}}
+			>
+				<HugeiconsIcon icon={icon} />
+			</Button>
+			<Slider
+				className="w-20"
+				aria-label="Preview volume"
+				value={[Math.round(shownVolume * 100)]}
+				min={0}
+				max={100}
+				step={1}
+				onValueChange={([next]) => {
+					const nextVolume = next / 100;
+					editor.playback.setVolume({ volume: nextVolume });
+					saveVolume({ volume: nextVolume });
+				}}
+			/>
+		</div>
 	);
 }

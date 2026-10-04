@@ -4,7 +4,6 @@ import {
 	type PreviewOverlayDefinition,
 	type PreviewOverlaySourceResult,
 } from "@/preview/overlays";
-import { getBookmarksActiveAtTime } from "./utils";
 import type { MediaTime } from "@/wasm";
 
 export const bookmarkNotesPreviewOverlay: PreviewOverlayDefinition = {
@@ -38,19 +37,15 @@ function BookmarkNotesOverlay({
 	);
 }
 
+/** `activeBookmarks` are the bookmarks under the playhead. */
 export function getBookmarkPreviewOverlaySource({
-	bookmarks,
-	time,
+	activeBookmarks,
 	isVisible,
 }: {
-	bookmarks: Bookmark[];
-	time: MediaTime;
+	activeBookmarks: Bookmark[];
 	isVisible: boolean;
 }): PreviewOverlaySourceResult {
-	const bookmarksWithNotes = getBookmarksActiveAtTime({
-		bookmarks,
-		time,
-	}).flatMap((bookmark) => {
+	const bookmarksWithNotes = activeBookmarks.flatMap((bookmark) => {
 		if (bookmark.note == null || bookmark.note.trim() === "") {
 			return [];
 		}

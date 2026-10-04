@@ -4,6 +4,18 @@ import { useEditor } from "@/editor/use-editor";
 import { useKeybindingsStore } from "@/actions/keybindings-store";
 import { isTypableDOMElement } from "@/utils/browser";
 
+/** Keys a focused slider uses to change its value. */
+const SLIDER_KEYS = new Set([
+	"arrowleft",
+	"arrowright",
+	"arrowup",
+	"arrowdown",
+	"home",
+	"end",
+	"pageup",
+	"pagedown",
+]);
+
 /**
  * a composable that hooks to the caller component's
  * lifecycle and hooks to the keyboard events to fire
@@ -44,6 +56,12 @@ export function useKeybindingsListener() {
 			if (!boundAction) return;
 
 			if (isTextInput) return;
+			// Let a focused slider (e.g. preview volume) handle its own keys
+			// instead of stepping the playhead.
+			const isSliderFocused =
+				activeElement instanceof HTMLElement &&
+				activeElement.getAttribute("role") === "slider";
+			if (isSliderFocused && SLIDER_KEYS.has(normalizedKey)) return;
 			if (boundAction === "paste-copied") {
 				if (!editor.clipboard.hasEntry()) return;
 				ev.preventDefault();

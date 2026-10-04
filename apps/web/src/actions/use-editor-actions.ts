@@ -21,6 +21,7 @@ import { cancelInteraction } from "@/editor/cancel-interaction";
 import { invokeAction } from "@/actions";
 import { toast } from "sonner";
 import { freezeFrameAtPlayhead } from "@/timeline/freeze-frame";
+import { useSilenceDialogStore } from "@/silence/silence-dialog-store";
 import { canToggleSourceAudio } from "@/timeline/audio-separation";
 import {
 	activateScope,
@@ -215,6 +216,14 @@ export function useEditorActions() {
 		"goto-end",
 		() => {
 			editor.playback.seek({ time: editor.timeline.getTotalDuration() });
+		},
+		undefined,
+	);
+
+	useActionHandler(
+		"remove-silence",
+		() => {
+			useSilenceDialogStore.getState().setOpen({ isOpen: true });
 		},
 		undefined,
 	);

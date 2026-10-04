@@ -19,6 +19,7 @@ import {
 	AudioBufferSink,
 	BlobSource,
 	Input,
+	InputDisposedError,
 	type WrappedAudioBuffer,
 } from "mediabunny";
 
@@ -202,7 +203,7 @@ export class AudioManager {
 					sessionId: this.playbackSessionId,
 				});
 			} else {
-				void this.runClipIterator({
+				void this.runClipIteratorSafely({
 					clip,
 					startTime: currentTime,
 					sessionId: this.playbackSessionId,
@@ -230,6 +231,24 @@ export class AudioManager {
 			source.disconnect();
 		}
 		this.queuedSources.clear();
+	}
+
+	/**
+	 * Timeline and media changes dispose the inputs while clips may still be
+	 * streaming from them; playback restarts with fresh inputs, so a stream
+	 * that finds its input disposed just stops.
+	 */
+	private async runClipIteratorSafely(
+		args: Parameters<AudioManager["runClipIterator"]>[0],
+	): Promise<void> {
+		try {
+			await this.runClipIterator(args);
+		} catch (error) {
+			if (error instanceof InputDisposedError) {
+				return;
+			}
+			console.warn("Audio clip playback failed:", error);
+		}
 	}
 
 	private async runClipIterator({
@@ -320,7 +339,7 @@ export class AudioManager {
 						}
 						const resyncStartTime = this.getPlaybackTime();
 						this.clipIterators.delete(clip.id);
-						void this.runClipIterator({
+						void this.runClipIteratorSafely({
 							clip,
 							startTime: resyncStartTime,
 							sessionId,

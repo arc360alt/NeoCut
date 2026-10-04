@@ -50,3 +50,30 @@ export function useScrollPosition({
 
 	return { scrollLeft, viewportWidth };
 }
+
+/**
+ * Just the viewport width. Unlike `useScrollPosition`, this does not
+ * re-render on scroll — which matters for components high in the tree,
+ * since the timeline scrolls every frame while following the playhead.
+ */
+export function useViewportWidth({
+	scrollRef,
+}: {
+	scrollRef: React.RefObject<HTMLElement | null>;
+}): number {
+	const [viewportWidth, setViewportWidth] = useState(0);
+
+	useEffect(() => {
+		const scrollElement = scrollRef.current;
+		if (!scrollElement) return;
+
+		const resizeObserver = new ResizeObserver(() => {
+			setViewportWidth(scrollElement.clientWidth);
+		});
+		setViewportWidth(scrollElement.clientWidth);
+		resizeObserver.observe(scrollElement);
+		return () => resizeObserver.disconnect();
+	}, [scrollRef]);
+
+	return viewportWidth;
+}

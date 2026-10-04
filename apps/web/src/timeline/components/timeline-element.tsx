@@ -57,7 +57,6 @@ import {
 	type TActionWithOptionalArgs,
 	invokeAction,
 } from "@/actions";
-import { useElementSelection } from "@/timeline/hooks/element/use-element-selection";
 import { resolveStickerId } from "@/stickers";
 import { buildGraphicPreviewUrl } from "@/graphics";
 import Image from "next/image";
@@ -77,7 +76,7 @@ import {
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { uppercase } from "@/utils/string";
-import { useMemo, type ComponentProps, type ReactNode } from "react";
+import { memo, useMemo, type ComponentProps, type ReactNode } from "react";
 import type { SelectedKeyframeRef, ElementKeyframe } from "@/animation/types";
 import { cn } from "@/utils/ui";
 import { usePropertiesStore } from "@/components/editor/panels/properties/stores/properties-store";
@@ -219,7 +218,11 @@ interface TimelineElementProps {
 	isDropTarget?: boolean;
 }
 
-export function TimelineElement({
+/**
+ * Memoized: the timeline can hold hundreds of these, and a clip only needs to
+ * re-render when its own data, selection or drag state changes.
+ */
+export const TimelineElement = memo(function TimelineElement({
 	element,
 	track,
 	zoomLevel,
@@ -231,7 +234,9 @@ export function TimelineElement({
 	isDropTarget = false,
 }: TimelineElementProps) {
 	const mediaAssets = useEditor((e) => e.media.getAssets());
-	const { selectedElements } = useElementSelection();
+	// Only the count matters here (menu wording); subscribing to the whole
+	// selection would re-render every clip whenever anything is selected.
+	const selectedCount = useEditor((e) => e.selection.getSelectedElements().length);
 	const requestRevealMedia = useAssetsPanelStore((s) => s.requestRevealMedia);
 	const { renderElement } = useElementPreview({
 		trackId: track.id,
@@ -248,10 +253,7 @@ export function TimelineElement({
 
 	const hasAudio = mediaSupportsAudio({ media: mediaAsset });
 
-	const isCurrentElementSelected = selectedElements.some(
-		(selected) =>
-			selected.elementId === element.id && selected.trackId === track.id,
-	);
+	const isCurrentElementSelected = isSelected;
 
 	const isDragging = dragView.kind === "dragging";
 	const dragTimeOffset = isDragging
@@ -337,7 +339,7 @@ export function TimelineElement({
 
 	const isMuted = canElementHaveAudio(element) && isElementMuted({ element });
 	const canToggleCurrentSourceAudio =
-		selectedElements.length === 1 &&
+		selectedCount === 1 &&
 		isCurrentElementSelected &&
 		canToggleSourceAudio(element, mediaAsset);
 	const sourceAudioLabel =
@@ -430,7 +432,7 @@ export function TimelineElement({
 						Split
 					</ActionMenuItem>
 					<CopyMenuItem />
-					{selectedElements.length === 1 && (
+					{selectedCount === 1 && (
 						<ActionMenuItem
 							action="duplicate-selected"
 							icon={<HugeiconsIcon icon={Copy01Icon} />}
@@ -440,7 +442,7 @@ export function TimelineElement({
 					)}
 					{canElementHaveAudio(element) && hasAudio && (
 						<MuteMenuItem
-							isMultipleSelected={selectedElements.length > 1}
+							isMultipleSelected={selectedCount > 1}
 							isCurrentElementSelected={isCurrentElementSelected}
 							isMuted={isMuted}
 						/>
@@ -465,7 +467,7 @@ export function TimelineElement({
 					{canElementBeHidden(element) && (
 						<VisibilityMenuItem
 							element={element}
-							isMultipleSelected={selectedElements.length > 1}
+							isMultipleSelected={selectedCount > 1}
 							isCurrentElementSelected={isCurrentElementSelected}
 						/>
 					)}
@@ -480,7 +482,7 @@ export function TimelineElement({
 							{isExpanded ? "Collapse keyframes" : "Expand keyframes"}
 						</ContextMenuItem>
 					)}
-					{selectedElements.length === 1 && hasMediaId(element) && (
+					{selectedCount === 1 && hasMediaId(element) && (
 						<>
 							<ContextMenuItem
 								icon={<HugeiconsIcon icon={Search01Icon} />}
@@ -500,16 +502,16 @@ export function TimelineElement({
 					)}
 					<ContextMenuSeparator />
 					<DeleteMenuItem
-						isMultipleSelected={selectedElements.length > 1}
+						isMultipleSelected={selectedCount > 1}
 						isCurrentElementSelected={isCurrentElementSelected}
 						elementType={element.type}
-						selectedCount={selectedElements.length}
+						selectedCount={selectedCount}
 					/>
 				</ContextMenuContent>
 			</ContextMenu>
 		</PixelsPerSecondContext.Provider>
 	);
-}
+});
 
 function ElementInner({
 	element,

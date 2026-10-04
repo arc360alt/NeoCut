@@ -30,10 +30,13 @@ import {
 } from "@/preview/overlays";
 import { usePreviewStore } from "@/preview/preview-store";
 import { getGuidePreviewOverlaySource } from "@/guides";
+import { SilenceDialog } from "@/silence/components/silence-dialog";
 import {
 	bookmarkNotesPreviewOverlay,
 	getBookmarkPreviewOverlaySource,
+	getBookmarksActiveAtTime,
 } from "@/timeline/bookmarks/index";
+import type { Bookmark } from "@/timeline";
 
 export default function Editor() {
 	const params = useParams();
@@ -51,6 +54,7 @@ export default function Editor() {
 					<Onboarding />
 					<MigrationDialog />
 					<ChangelogNotification />
+					<SilenceDialog />
 				</div>
 			</EditorProvider>
 		</MobileGate>
@@ -78,13 +82,26 @@ function DegradedRendererBanner() {
 	);
 }
 
+const NO_BOOKMARKS: Bookmark[] = [];
+
 function EditorLayout() {
 	usePasteMedia();
 	const { panels, setPanel } = usePanelStore();
 	const activeScene = useEditor((editor) =>
 		editor.scenes.getActiveSceneOrNull(),
 	);
-	const currentTime = useEditor((editor) => editor.playback.getCurrentTime());
+	// Selecting the bookmarks under the playhead rather than the time itself
+	// keeps playback from re-rendering the whole editor on every tick; the
+	// shallow-compared list only changes when a bookmark starts or ends.
+	const activeBookmarks = useEditor((editor) => {
+		const scene = editor.scenes.getActiveSceneOrNull();
+		return scene
+			? getBookmarksActiveAtTime({
+					bookmarks: scene.bookmarks,
+					time: editor.playback.getCurrentTime(),
+				})
+			: NO_BOOKMARKS;
+	});
 	const activeGuide = usePreviewStore((state) => state.activeGuide);
 	const overlays = usePreviewStore((state) => state.overlays);
 	const setOverlayVisibility = usePreviewStore(
@@ -104,8 +121,7 @@ function EditorLayout() {
 					}),
 					activeScene
 						? getBookmarkPreviewOverlaySource({
-								bookmarks: activeScene.bookmarks,
-								time: currentTime,
+								activeBookmarks,
 								isVisible: showBookmarkNotes,
 							})
 						: {
@@ -114,7 +130,7 @@ function EditorLayout() {
 							},
 				],
 			}),
-		[activeGuide, activeScene, currentTime, showBookmarkNotes],
+		[activeGuide, activeScene, activeBookmarks, showBookmarkNotes],
 	);
 
 	const overlayControls = useMemo(

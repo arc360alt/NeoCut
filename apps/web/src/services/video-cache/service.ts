@@ -21,6 +21,36 @@ export interface DecodedVideoFrame {
 	duration: number;
 }
 
+/** Independent decode positions per video, e.g. both sides of a transition. */
+const MAX_STREAMS_PER_SINK = 3;
+/** A stream this far behind a request is still worth decoding forward. */
+const MAX_FORWARD_GAP_SECONDS = 10;
+/**
+ * Requests this close together come from the same clip moving forward, so a
+ * newer one may replace an older one. Requests further apart are different
+ * clips (e.g. both sides of a transition) and must not cancel each other.
+ */
+const SAME_CONSUMER_SECONDS = 0.25;
+
+/** One decoder position in a video, with its own output canvases. */
+interface VideoStream {
+	iterator: AsyncGenerator<VideoSample, void, unknown> | null;
+	/** Decoded but not yet consumed; at most one is held. */
+	pending: VideoSample | null;
+	/** Timestamp of the last sample pulled from the iterator. */
+	position: number;
+	current: DecodedVideoFrame | null;
+	canvases: OffscreenCanvas[];
+	nextCanvasIndex: number;
+	lastUsedAt: number;
+	/** Requests to one stream run in order. */
+	chain: Promise<unknown>;
+	generation: number;
+	/** Time of the newest queued request, or null when idle. */
+	latestRequest: number | null;
+	inFlight: number;
+}
+
 interface VideoSinkData {
 	mediaId: string;
 	maxSize: number | null;
@@ -30,14 +60,7 @@ interface VideoSinkData {
 	packets: EncodedPacketSink;
 	outputWidth: number;
 	outputHeight: number;
-	iterator: AsyncGenerator<VideoSample, void, unknown> | null;
-	/** Decoded but not yet consumed; at most one is held. */
-	pending: VideoSample | null;
-	/** Timestamp of the last sample pulled from the iterator. */
-	position: number;
-	current: DecodedVideoFrame | null;
-	canvases: OffscreenCanvas[];
-	nextCanvasIndex: number;
+	streams: VideoStream[];
 }
 
 /**
@@ -45,14 +68,16 @@ interface VideoSinkData {
  *
  * Decoding is sequential: reaching a frame means decoding everything since
  * the previous key frame. Long recordings can have key frames minutes apart,
- * so the cache keeps decoding forward whenever that is cheaper than starting
- * over, and only draws the frames that are actually shown.
+ * so each stream keeps decoding forward whenever that is cheaper than
+ * starting over, and only draws the frames that are actually shown.
+ *
+ * A video can be needed at two places at once (two clips cut from it, shown
+ * together during a transition). Each place gets its own stream, so they do
+ * not keep throwing away each other's decoding work.
  */
 export class VideoCache {
 	private sinks = new Map<string, VideoSinkData>();
 	private initPromises = new Map<string, Promise<void>>();
-	private frameChain = new Map<string, Promise<unknown>>();
-	private seekGenerations = new Map<string, number>();
 	private sweepTimer: ReturnType<typeof setTimeout> | null = null;
 
 	/**
@@ -76,53 +101,119 @@ export class VideoCache {
 
 		const sinkData = this.sinks.get(sinkKey);
 		if (!sinkData) return null;
-		sinkData.lastUsedAt = performance.now();
+		const now = performance.now();
+		sinkData.lastUsedAt = now;
 		this.scheduleIdleSweep();
 
-		const generation = (this.seekGenerations.get(sinkKey) ?? 0) + 1;
-		this.seekGenerations.set(sinkKey, generation);
+		const stream = this.pickStream({ sinkData, time });
+		stream.lastUsedAt = now;
+		const generation = ++stream.generation;
+		stream.latestRequest = time;
+		stream.inFlight++;
 
-		const previous = this.frameChain.get(sinkKey) ?? Promise.resolve();
-		const current = previous.then(() => {
-			// A newer request superseded this one while it waited; skip the work.
-			if (this.seekGenerations.get(sinkKey) !== generation) {
-				return sinkData.current;
-			}
-			return this.resolveFrame({ sinkData, time });
-		});
-		this.frameChain.set(
-			sinkKey,
-			current.catch(() => {}),
-		);
-		return current;
+		const result = stream.chain
+			.then(() => {
+				// The same clip already asked for a later frame; skip this one.
+				const isSuperseded =
+					stream.generation !== generation &&
+					stream.latestRequest !== null &&
+					Math.abs(stream.latestRequest - time) < SAME_CONSUMER_SECONDS;
+				if (isSuperseded) {
+					return stream.current;
+				}
+				return this.resolveFrame({ sinkData, stream, time });
+			})
+			.finally(() => {
+				stream.inFlight--;
+				if (stream.inFlight === 0) {
+					stream.latestRequest = null;
+				}
+			});
+		stream.chain = result.catch(() => {});
+		return result;
 	}
 
-	private async resolveFrame({
+	/** The stream that can reach `time` most cheaply. */
+	private pickStream({
 		sinkData,
 		time,
 	}: {
 		sinkData: VideoSinkData;
 		time: number;
+	}): VideoStream {
+		// A stream busy with a request for another part of the video belongs to
+		// another clip right now.
+		const available = sinkData.streams.filter(
+			(stream) =>
+				stream.latestRequest === null ||
+				Math.abs(stream.latestRequest - time) < SAME_CONSUMER_SECONDS,
+		);
+
+		const covering = available.find(
+			(stream) => stream.current && isFrameAt({ frame: stream.current, time }),
+		);
+		if (covering) {
+			return covering;
+		}
+
+		let closestBehind: VideoStream | null = null;
+		for (const stream of available) {
+			const position = stream.current?.timestamp ?? stream.position;
+			if (
+				position <= time + TIMESTAMP_EPSILON &&
+				time - position <= MAX_FORWARD_GAP_SECONDS &&
+				(!closestBehind ||
+					position > (closestBehind.current?.timestamp ?? closestBehind.position))
+			) {
+				closestBehind = stream;
+			}
+		}
+		if (closestBehind) {
+			return closestBehind;
+		}
+
+		if (sinkData.streams.length < MAX_STREAMS_PER_SINK) {
+			const stream = createStream({
+				width: sinkData.outputWidth,
+				height: sinkData.outputHeight,
+			});
+			sinkData.streams.push(stream);
+			return stream;
+		}
+
+		return sinkData.streams.reduce((oldest, stream) =>
+			stream.lastUsedAt < oldest.lastUsedAt ? stream : oldest,
+		);
+	}
+
+	private async resolveFrame({
+		sinkData,
+		stream,
+		time,
+	}: {
+		sinkData: VideoSinkData;
+		stream: VideoStream;
+		time: number;
 	}): Promise<DecodedVideoFrame | null> {
-		const current = sinkData.current;
+		const current = stream.current;
 		if (current && isFrameAt({ frame: current, time })) {
 			return current;
 		}
 
 		try {
-			if (await this.canContinueTo({ sinkData, time })) {
-				const frame = await this.decodeForwardTo({ sinkData, time });
+			if (await this.canContinueTo({ sinkData, stream, time })) {
+				const frame = await this.decodeForwardTo({ stream, time });
 				if (frame) {
 					return frame;
 				}
 			}
 
-			await this.restartAt({ sinkData, time });
-			return (await this.decodeForwardTo({ sinkData, time })) ?? sinkData.current;
+			await this.restartAt({ sinkData, stream, time });
+			return (await this.decodeForwardTo({ stream, time })) ?? stream.current;
 		} catch (error) {
 			console.warn("Failed to decode video frame:", error);
-			await this.resetIterator({ sinkData });
-			return sinkData.current;
+			await resetStream({ stream });
+			return stream.current;
 		}
 	}
 
@@ -133,15 +224,17 @@ export class VideoCache {
 	 */
 	private async canContinueTo({
 		sinkData,
+		stream,
 		time,
 	}: {
 		sinkData: VideoSinkData;
+		stream: VideoStream;
 		time: number;
 	}): Promise<boolean> {
-		if (!sinkData.iterator) {
+		if (!stream.iterator) {
 			return false;
 		}
-		const position = sinkData.pending?.timestamp ?? sinkData.position;
+		const position = stream.pending?.timestamp ?? stream.position;
 		if (time + TIMESTAMP_EPSILON < position) {
 			return false;
 		}
@@ -154,27 +247,16 @@ export class VideoCache {
 
 	private async restartAt({
 		sinkData,
+		stream,
 		time,
 	}: {
 		sinkData: VideoSinkData;
+		stream: VideoStream;
 		time: number;
 	}): Promise<void> {
-		await this.resetIterator({ sinkData });
-		sinkData.iterator = sinkData.samples.samples(time);
-		sinkData.position = Number.NEGATIVE_INFINITY;
-	}
-
-	private async resetIterator({
-		sinkData,
-	}: {
-		sinkData: VideoSinkData;
-	}): Promise<void> {
-		sinkData.pending?.close();
-		sinkData.pending = null;
-		const iterator = sinkData.iterator;
-		sinkData.iterator = null;
-		sinkData.position = Number.NEGATIVE_INFINITY;
-		await iterator?.return();
+		await resetStream({ stream });
+		stream.iterator = sinkData.samples.samples(time);
+		stream.position = Number.NEGATIVE_INFINITY;
 	}
 
 	/**
@@ -182,37 +264,38 @@ export class VideoCache {
 	 * it without drawing them. Returns null when the stream ends first.
 	 */
 	private async decodeForwardTo({
-		sinkData,
+		stream,
 		time,
 	}: {
-		sinkData: VideoSinkData;
+		stream: VideoStream;
 		time: number;
 	}): Promise<DecodedVideoFrame | null> {
-		const iterator = sinkData.iterator;
+		const iterator = stream.iterator;
 		if (!iterator) {
 			return null;
 		}
 
 		while (true) {
-			let sample = sinkData.pending;
-			sinkData.pending = null;
+			let sample = stream.pending;
+			stream.pending = null;
 			if (!sample) {
 				const result = await iterator.next();
 				if (result.done) {
 					return null;
 				}
 				sample = result.value;
-				sinkData.position = sample.timestamp;
+				stream.position = sample.timestamp;
 			}
 
 			const sampleEnd = sample.timestamp + sample.duration;
-			const coversTime = time + TIMESTAMP_EPSILON >= sample.timestamp && time < sampleEnd;
+			const coversTime =
+				time + TIMESTAMP_EPSILON >= sample.timestamp && time < sampleEnd;
 			// A sample past the target means there is a gap; show the next frame.
 			const isPastTime = sample.timestamp > time + TIMESTAMP_EPSILON;
 			if (coversTime || isPastTime) {
-				const frame = this.drawSample({ sinkData, sample });
+				const frame = drawSample({ stream, sample });
 				if (isPastTime) {
-					sinkData.pending = sample;
+					stream.pending = sample;
 				} else {
 					sample.close();
 				}
@@ -221,32 +304,6 @@ export class VideoCache {
 
 			sample.close();
 		}
-	}
-
-	private drawSample({
-		sinkData,
-		sample,
-	}: {
-		sinkData: VideoSinkData;
-		sample: VideoSample;
-	}): DecodedVideoFrame {
-		const canvas = sinkData.canvases[sinkData.nextCanvasIndex];
-		sinkData.nextCanvasIndex =
-			(sinkData.nextCanvasIndex + 1) % sinkData.canvases.length;
-		const ctx = canvas.getContext("2d");
-		if (!ctx) {
-			throw new Error("Failed to get 2d context for video frame");
-		}
-		ctx.clearRect(0, 0, canvas.width, canvas.height);
-		sample.drawWithFit(ctx, { fit: "contain" });
-
-		const frame: DecodedVideoFrame = {
-			canvas,
-			timestamp: sample.timestamp,
-			duration: sample.duration,
-		};
-		sinkData.current = frame;
-		return frame;
 	}
 
 	private async ensureSink({
@@ -329,15 +386,7 @@ export class VideoCache {
 				packets: new EncodedPacketSink(videoTrack),
 				outputWidth: width,
 				outputHeight: height,
-				iterator: null,
-				pending: null,
-				position: Number.NEGATIVE_INFINITY,
-				current: null,
-				canvases: Array.from(
-					{ length: OUTPUT_CANVAS_POOL_SIZE },
-					() => new OffscreenCanvas(width, height),
-				),
-				nextCanvasIndex: 0,
+				streams: [],
 			});
 		} catch (error) {
 			input.dispose();
@@ -361,7 +410,14 @@ export class VideoCache {
 			for (const [sinkKey, sinkData] of [...this.sinks]) {
 				if (now - sinkData.lastUsedAt >= IDLE_SINK_TTL_MS) {
 					this.disposeSink({ sinkKey });
+					continue;
 				}
+				// Within a live video, drop streams no longer being played.
+				sinkData.streams = sinkData.streams.filter((stream) => {
+					const isIdle = now - stream.lastUsedAt >= IDLE_SINK_TTL_MS;
+					if (isIdle) void resetStream({ stream });
+					return !isIdle;
+				});
 			}
 			if (this.sinks.size > 0) {
 				this.scheduleIdleSweep();
@@ -372,20 +428,14 @@ export class VideoCache {
 	private disposeSink({ sinkKey }: { sinkKey: string }): void {
 		const sinkData = this.sinks.get(sinkKey);
 		if (sinkData) {
-			sinkData.pending?.close();
-			sinkData.pending = null;
-			if (sinkData.iterator) {
-				void sinkData.iterator.return();
-				sinkData.iterator = null;
+			for (const stream of sinkData.streams) {
+				void resetStream({ stream });
 			}
-
+			sinkData.streams = [];
 			sinkData.input.dispose();
 			this.sinks.delete(sinkKey);
 		}
-
 		this.initPromises.delete(sinkKey);
-		this.frameChain.delete(sinkKey);
-		this.seekGenerations.delete(sinkKey);
 	}
 
 	clearVideo({ mediaId }: { mediaId: string }): void {
@@ -408,14 +458,72 @@ export class VideoCache {
 	}
 
 	getStats() {
+		const streams = Array.from(this.sinks.values()).flatMap((s) => s.streams);
 		return {
 			totalSinks: this.sinks.size,
-			activeSinks: Array.from(this.sinks.values()).filter((s) => s.iterator)
-				.length,
-			cachedFrames: Array.from(this.sinks.values()).filter((s) => s.current)
-				.length,
+			activeSinks: streams.filter((stream) => stream.iterator).length,
+			cachedFrames: streams.filter((stream) => stream.current).length,
 		};
 	}
+}
+
+function createStream({
+	width,
+	height,
+}: {
+	width: number;
+	height: number;
+}): VideoStream {
+	return {
+		iterator: null,
+		pending: null,
+		position: Number.NEGATIVE_INFINITY,
+		current: null,
+		canvases: Array.from(
+			{ length: OUTPUT_CANVAS_POOL_SIZE },
+			() => new OffscreenCanvas(width, height),
+		),
+		nextCanvasIndex: 0,
+		lastUsedAt: performance.now(),
+		chain: Promise.resolve(),
+		generation: 0,
+		latestRequest: null,
+		inFlight: 0,
+	};
+}
+
+async function resetStream({ stream }: { stream: VideoStream }): Promise<void> {
+	stream.pending?.close();
+	stream.pending = null;
+	const iterator = stream.iterator;
+	stream.iterator = null;
+	stream.position = Number.NEGATIVE_INFINITY;
+	await iterator?.return();
+}
+
+function drawSample({
+	stream,
+	sample,
+}: {
+	stream: VideoStream;
+	sample: VideoSample;
+}): DecodedVideoFrame {
+	const canvas = stream.canvases[stream.nextCanvasIndex];
+	stream.nextCanvasIndex = (stream.nextCanvasIndex + 1) % stream.canvases.length;
+	const ctx = canvas.getContext("2d");
+	if (!ctx) {
+		throw new Error("Failed to get 2d context for video frame");
+	}
+	ctx.clearRect(0, 0, canvas.width, canvas.height);
+	sample.drawWithFit(ctx, { fit: "contain" });
+
+	const frame: DecodedVideoFrame = {
+		canvas,
+		timestamp: sample.timestamp,
+		duration: sample.duration,
+	};
+	stream.current = frame;
+	return frame;
 }
 
 function isFrameAt({

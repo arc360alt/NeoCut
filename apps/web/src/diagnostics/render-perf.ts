@@ -24,12 +24,15 @@ type CounterStats = {
 };
 
 const FLUSH_EVERY = 60;
+/** Slow machines may never reach FLUSH_EVERY frames; report on a timer too. */
+const FLUSH_INTERVAL_MS = 5000;
 
 const spans = new Map<string, SpanStats>();
 const counters = new Map<string, CounterStats>();
 const pendingCountersThisFrame = new Map<string, number>();
 
 let framesSinceFlush = 0;
+let lastFlushAt = 0;
 
 declare global {
 	interface Window {
@@ -134,7 +137,15 @@ export function onRenderPerfFrameComplete(): void {
 	pendingCountersThisFrame.clear();
 
 	framesSinceFlush += 1;
-	if (framesSinceFlush >= FLUSH_EVERY) {
+	const now = performance.now();
+	if (lastFlushAt === 0) {
+		lastFlushAt = now;
+	}
+	if (
+		framesSinceFlush >= FLUSH_EVERY ||
+		now - lastFlushAt >= FLUSH_INTERVAL_MS
+	) {
+		lastFlushAt = now;
 		flush();
 	}
 }

@@ -13,7 +13,7 @@ import type {
 const PERSPECTIVE_STRIPS = 96;
 /** Camera distance, as a multiple of the face width. */
 const PERSPECTIVE_DISTANCE = 2;
-/** Slight overlap between slices so no seams show. */
+/** Slight overlap between slices, in device pixels, so no seams show. */
 const STRIP_OVERLAP_PX = 0.75;
 
 export function applyTransitionTransform({
@@ -65,6 +65,7 @@ export function applyTransitionClip({
 	canvasWidth,
 	canvasHeight,
 	textures,
+	textureScale = 1,
 }: {
 	mask: LayerMaskDescriptor | null;
 	state: TransitionLayerState | null;
@@ -72,6 +73,12 @@ export function applyTransitionClip({
 	canvasWidth: number;
 	canvasHeight: number;
 	textures: Map<string, TextureUploadDescriptor>;
+	/**
+	 * Resolution of the standalone reveal mask relative to the canvas. The
+	 * compositor samples masks by normalized coordinates, so the preview can
+	 * use a small one instead of uploading a full-canvas mask every frame.
+	 */
+	textureScale?: number;
 }): LayerMaskDescriptor | null {
 	const clip = state?.clip;
 	if (!clip) {
@@ -84,13 +91,20 @@ export function applyTransitionClip({
 	const elementMaskTexture = mask ? textures.get(mask.textureId) : undefined;
 	if (!mask || !elementMaskTexture || elementMaskTexture.kind !== "rendered") {
 		const textureId = `${path}:transition-clip`;
+		const width = Math.max(1, Math.round(canvasWidth * textureScale));
+		const height = Math.max(1, Math.round(canvasHeight * textureScale));
 		textures.set(textureId, {
 			kind: "rendered",
 			id: textureId,
-			contentHash: `transition-clip:${clip.key}:${canvasWidth}x${canvasHeight}`,
-			width: canvasWidth,
-			height: canvasHeight,
-			draw: drawClip,
+			contentHash: `transition-clip:${clip.key}:${width}x${height}`,
+			width,
+			height,
+			draw: (ctx) => {
+				ctx.save();
+				ctx.scale(width / canvasWidth, height / canvasHeight);
+				drawClip(ctx);
+				ctx.restore();
+			},
 		});
 		return { textureId, feather: 0, inverted: false };
 	}
@@ -168,6 +182,11 @@ export function drawPerspectiveLayer({
 	ctx.translate(transform.centerX, transform.centerY);
 	ctx.rotate((transform.rotationDegrees * Math.PI) / 180);
 	ctx.scale(transform.flipX ? -1 : 1, transform.flipY ? -1 : 1);
+	// The context may already be scaled (e.g. a reduced-size preview texture);
+	// convert the overlap so it stays at least a device pixel wide.
+	const matrix = ctx.getTransform();
+	const deviceScaleX = Math.hypot(matrix.a, matrix.b) || 1;
+	const overlap = STRIP_OVERLAP_PX / deviceScaleX;
 
 	const stripWidth = width / PERSPECTIVE_STRIPS;
 	const sourceStripWidth = sourceWidth / PERSPECTIVE_STRIPS;
@@ -187,7 +206,7 @@ export function drawPerspectiveLayer({
 			sourceHeight,
 			left.x,
 			-destHeight / 2,
-			destWidth + STRIP_OVERLAP_PX,
+			destWidth + overlap,
 			destHeight,
 		);
 	}

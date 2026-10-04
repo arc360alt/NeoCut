@@ -307,6 +307,15 @@ async function collectVisualSourceNode({
 		transform,
 		textures,
 	});
+	// The preview shows the canvas scaled down; transition textures drawn
+	// per frame only need that resolution. Export keeps full size.
+	const transitionTextureScale =
+		renderer.sourceSizeLimit === null
+			? 1
+			: Math.min(
+					1,
+					renderer.sourceSizeLimit / Math.max(renderer.width, renderer.height),
+				);
 	const mask = applyTransitionClip({
 		mask: elementMask,
 		state: transition,
@@ -314,6 +323,7 @@ async function collectVisualSourceNode({
 		canvasWidth: renderer.width,
 		canvasHeight: renderer.height,
 		textures,
+		textureScale: transitionTextureScale,
 	});
 
 	const sourceVersion =
@@ -331,13 +341,17 @@ async function collectVisualSourceNode({
 		// rasterized into a full-canvas texture instead.
 		textureId = `${path}:transition-3d`;
 		layerTransform = fullCanvasTransform(renderer);
+		const faceWidth = Math.max(1, Math.round(renderer.width * transitionTextureScale));
+		const faceHeight = Math.max(1, Math.round(renderer.height * transitionTextureScale));
 		textures.set(textureId, {
 			kind: "rendered",
 			id: textureId,
-			contentHash: `transition-3d:${sourceKey}:${sourceWidth}x${sourceHeight}:${transformHash(transform)}:${rotateY.angle}:${rotateY.pivotDepth}:${renderer.width}x${renderer.height}:${adjustmentKey}`,
-			width: renderer.width,
-			height: renderer.height,
-			draw: (ctx) =>
+			contentHash: `transition-3d:${sourceKey}:${sourceWidth}x${sourceHeight}:${transformHash(transform)}:${rotateY.angle}:${rotateY.pivotDepth}:${faceWidth}x${faceHeight}:${adjustmentKey}`,
+			width: faceWidth,
+			height: faceHeight,
+			draw: (ctx) => {
+				ctx.save();
+				ctx.scale(faceWidth / renderer.width, faceHeight / renderer.height);
 				drawPerspectiveLayer({
 					ctx,
 					source: adjustments
@@ -352,7 +366,9 @@ async function collectVisualSourceNode({
 					sourceHeight,
 					transform,
 					rotateY,
-				}),
+				});
+				ctx.restore();
+			},
 		});
 	} else if (adjustments) {
 		textureId = `${path}:adjusted`;

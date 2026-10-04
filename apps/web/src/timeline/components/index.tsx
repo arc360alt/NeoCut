@@ -33,6 +33,7 @@ import { useContainerSize } from "@/hooks/use-container-size";
 import type { MediaTime } from "@/wasm";
 import type { ElementDragView, DropTarget } from "@/timeline";
 import { TimelineTrackContent } from "./timeline-track";
+import { useVisibleTimeRange } from "@/timeline/hooks/use-visible-time-range";
 import { TimelinePlayhead } from "./timeline-playhead";
 import { SelectionBox } from "@/selection/selection-box";
 import { useBoxSelect } from "@/selection/hooks/use-box-select";
@@ -81,7 +82,7 @@ import { useInitialScrollBottom } from "@/timeline/hooks/use-initial-scroll-bott
 import { useTimelineResize } from "@/timeline/hooks/use-timeline-resize";
 import { useTimelineStore } from "@/timeline/timeline-store";
 import { useEditor } from "@/editor/use-editor";
-import { useScrollPosition } from "@/timeline/hooks/use-scroll-position";
+import { useViewportWidth } from "@/timeline/hooks/use-scroll-position";
 import { useTimelinePlayhead } from "@/timeline/hooks/use-timeline-playhead";
 import { DragLine } from "./drag-line";
 import { invokeAction } from "@/actions";
@@ -156,7 +157,7 @@ export function Timeline() {
 	const { height: timelineHeaderHeightValue } = useContainerSize({
 		containerRef: timelineHeaderRef,
 	});
-	const { viewportWidth: tracksViewportWidth } = useScrollPosition({
+	const tracksViewportWidth = useViewportWidth({
 		scrollRef: tracksScrollRef,
 	});
 
@@ -559,6 +560,7 @@ export function Timeline() {
 										shouldIgnoreClick={shouldIgnoreClick}
 										isDragOver={isDragOver}
 										dropTarget={dropTarget}
+										scrollRef={tracksScrollRef}
 									/>
 								)}
 							</div>
@@ -732,6 +734,7 @@ function TimelineTrackRows({
 	shouldIgnoreClick,
 	isDragOver,
 	dropTarget,
+	scrollRef,
 }: {
 	mainTrackId: string | null;
 	zoomLevel: number;
@@ -750,8 +753,10 @@ function TimelineTrackRows({
 	shouldIgnoreClick: () => boolean;
 	isDragOver: boolean;
 	dropTarget: DropTarget | null;
+	scrollRef: React.RefObject<HTMLDivElement | null>;
 }) {
 	const timeline = useEditor((e) => e.timeline);
+	const visibleRange = useVisibleTimeRange({ scrollRef, zoomLevel });
 	const scene = useEditor((e) => e.scenes.getActiveSceneOrNull());
 	const tracks = useMemo<TimelineTrack[]>(
 		() =>
@@ -827,6 +832,7 @@ function TimelineTrackRows({
 								onTrackMouseDown={onTrackMouseDown}
 								onTrackMouseUp={onTrackMouseUp}
 								shouldIgnoreClick={shouldIgnoreClick}
+								visibleRange={visibleRange}
 								targetElementId={
 									isDragOver
 										? (dropTarget?.targetElement?.elementId ?? null)

@@ -64,7 +64,19 @@ export class CanvasRenderer {
 		this.context = surface.context;
 	}
 
+	/** Renders one frame into the compositor's canvas (what the preview shows). */
 	async render({ node, time }: { node: AnyBaseNode; time: number }) {
+		await this.renderFrame({ node, time });
+		onRenderPerfFrameComplete();
+	}
+
+	private async renderFrame({
+		node,
+		time,
+	}: {
+		node: AnyBaseNode;
+		time: number;
+	}) {
 		await measureSpanAsync({
 			name: "resolve",
 			fn: () => resolveRenderTree({ node, renderer: this, time }),
@@ -96,7 +108,7 @@ export class CanvasRenderer {
 		time: number;
 		targetCanvas: HTMLCanvasElement;
 	}) {
-		await this.render({ node, time });
+		await this.renderFrame({ node, time });
 
 		const ctx = targetCanvas.getContext("2d");
 		if (!ctx) {

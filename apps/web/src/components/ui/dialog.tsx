@@ -47,8 +47,11 @@ DialogOverlay.displayName = DialogPrimitive.Overlay.displayName;
 
 const DialogContent = React.forwardRef<
 	React.ElementRef<typeof DialogPrimitive.Content>,
-	React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
->(({ className, children, ...props }, ref) => (
+	React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & {
+		/** Hide the corner ✕, e.g. for dialogs only their own buttons may close. */
+		showCloseButton?: boolean;
+	}
+>(({ className, children, showCloseButton = true, ...props }, ref) => (
 	<DialogPortal>
 		<DialogOverlay />
 		<DialogPrimitive.Content
@@ -64,10 +67,12 @@ const DialogContent = React.forwardRef<
 			{...props}
 		>
 			{children}
-			<DialogPrimitive.Close className="ring-offset-background focus:ring-ring data-[state=open]:bg-accent data-[state=open]:text-muted-foreground absolute top-6 right-6 cursor-pointer opacity-70 hover:opacity-100 focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none">
-				<X className="size-5 text-muted-foreground" />
-				<span className="sr-only">Close</span>
-			</DialogPrimitive.Close>
+			{showCloseButton && (
+				<DialogPrimitive.Close className="ring-offset-background focus:ring-ring data-[state=open]:bg-accent data-[state=open]:text-muted-foreground absolute top-6 right-6 cursor-pointer opacity-70 hover:opacity-100 focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none">
+					<X className="size-5 text-muted-foreground" />
+					<span className="sr-only">Close</span>
+				</DialogPrimitive.Close>
+			)}
 		</DialogPrimitive.Content>
 	</DialogPortal>
 ));

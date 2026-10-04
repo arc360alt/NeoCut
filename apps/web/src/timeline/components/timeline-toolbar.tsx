@@ -32,6 +32,7 @@ import {
 	Bookmark02Icon,
 	Delete02Icon,
 	SnowIcon,
+	VolumeOffIcon,
 	ScissorIcon,
 	MagnetIcon,
 	SearchAddIcon,
@@ -180,6 +181,14 @@ function ToolbarLeftSection() {
 					tooltip="Duplicate element"
 					onClick={({ event }) =>
 						handleAction({ action: "duplicate-selected", event })
+					}
+				/>
+
+				<ToolbarButton
+					icon={<HugeiconsIcon icon={VolumeOffIcon} />}
+					tooltip="Remove silence"
+					onClick={({ event }) =>
+						handleAction({ action: "remove-silence", event })
 					}
 				/>
 

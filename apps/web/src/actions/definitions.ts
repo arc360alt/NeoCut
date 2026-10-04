@@ -70,6 +70,10 @@ export const ACTIONS = {
 		description: "Freeze frame at playhead",
 		category: "editing",
 	},
+	"remove-silence": {
+		description: "Remove silence from the selected clip",
+		category: "editing",
+	},
 	split: {
 		description: "Split elements at playhead",
 		category: "editing",

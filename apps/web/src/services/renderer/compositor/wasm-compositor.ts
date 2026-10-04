@@ -161,8 +161,16 @@ class WasmCompositor {
 		if (!ctx) {
 			throw new Error(`Failed to get 2d context for texture ${texture.id}`);
 		}
+		// The canvas is reused across frames; a draw that left its transform,
+		// alpha or blend mode changed must not affect the next one.
+		ctx.setTransform(1, 0, 0, 1, 0, 0);
+		ctx.globalAlpha = 1;
+		ctx.globalCompositeOperation = "source-over";
+		ctx.filter = "none";
 		ctx.clearRect(0, 0, texture.width, texture.height);
+		ctx.save();
 		texture.draw(ctx);
+		ctx.restore();
 
 		incrementCounter({ name: "textureUpload" });
 		incrementCounter({
