@@ -67,6 +67,15 @@ export class SaveManager {
 		await this.saveNow();
 	}
 
+	/**
+	 * Drops changes waiting to be saved. Used when the project closes: tearing
+	 * down its scenes looks like an edit, but there is nothing left to save.
+	 */
+	discardPending(): void {
+		this.hasPendingSave = false;
+		this.clearTimer();
+	}
+
 	getIsDirty(): boolean {
 		return this.hasPendingSave || this.isSaving;
 	}
@@ -85,7 +94,7 @@ export class SaveManager {
 		if (this.isSaving) return;
 		if (!this.hasPendingSave) return;
 
-		const activeProject = this.editor.project.getActive();
+		const activeProject = this.editor.project.getActiveOrNull();
 		if (!activeProject) return;
 		if (this.editor.project.getIsLoading()) return;
 		if (this.editor.project.getMigrationState().isMigrating) return;

@@ -8,7 +8,12 @@ interface UseEdgeAutoScrollParams {
 	contentWidth: number;
 	edgeThreshold?: number;
 	maxScrollSpeed?: number;
+	/** Called after each auto-scroll step, e.g. to keep a dragged item under the pointer. */
+	onScroll?: () => void;
 }
+
+/** Pointer travel (px) toward an edge before that edge starts scrolling. */
+const EDGE_INTENT_DISTANCE = 4;
 
 export function useEdgeAutoScroll({
 	isActive,
@@ -18,8 +23,13 @@ export function useEdgeAutoScroll({
 	contentWidth,
 	edgeThreshold = 100,
 	maxScrollSpeed = 15,
+	onScroll,
 }: UseEdgeAutoScrollParams): void {
 	const rafRef = useRef<number | null>(null);
+	const onScrollRef = useRef(onScroll);
+	useEffect(() => {
+		onScrollRef.current = onScroll;
+	});
 
 	useEffect(() => {
 		if (!isActive) {
@@ -29,6 +39,10 @@ export function useEdgeAutoScroll({
 			}
 			return;
 		}
+
+		// Where the pointer was when the drag began. Grabbing something that is
+		// already near an edge must not scroll: only moving toward the edge does.
+		let startMouseX: number | null = null;
 
 		const step = () => {
 			const rulerViewport = rulerScrollRef.current;
@@ -40,7 +54,10 @@ export function useEdgeAutoScroll({
 
 			const viewportRect = rulerViewport.getBoundingClientRect();
 			const mouseX = getMouseClientX();
+			startMouseX ??= mouseX;
 			const mouseXRelative = mouseX - viewportRect.left;
+			const movedLeft = mouseX < startMouseX - EDGE_INTENT_DISTANCE;
+			const movedRight = mouseX > startMouseX + EDGE_INTENT_DISTANCE;
 
 			const viewportWidth = rulerViewport.clientWidth;
 			const intrinsicContentWidth = rulerViewport.scrollWidth;
@@ -52,11 +69,16 @@ export function useEdgeAutoScroll({
 
 			let scrollSpeed = 0;
 
-			if (mouseXRelative < edgeThreshold && rulerViewport.scrollLeft > 0) {
+			if (
+				movedLeft &&
+				mouseXRelative < edgeThreshold &&
+				rulerViewport.scrollLeft > 0
+			) {
 				const edgeDistance = Math.max(0, mouseXRelative);
 				const intensity = 1 - edgeDistance / edgeThreshold;
 				scrollSpeed = -maxScrollSpeed * intensity;
 			} else if (
+				movedRight &&
 				mouseXRelative > viewportWidth - edgeThreshold &&
 				rulerViewport.scrollLeft < scrollMax
 			) {
@@ -70,8 +92,11 @@ export function useEdgeAutoScroll({
 					0,
 					Math.min(scrollMax, rulerViewport.scrollLeft + scrollSpeed),
 				);
-				rulerViewport.scrollLeft = newScrollLeft;
-				tracksViewport.scrollLeft = newScrollLeft;
+				if (newScrollLeft !== rulerViewport.scrollLeft) {
+					rulerViewport.scrollLeft = newScrollLeft;
+					tracksViewport.scrollLeft = newScrollLeft;
+					onScrollRef.current?.();
+				}
 			}
 
 			rafRef.current = requestAnimationFrame(step);

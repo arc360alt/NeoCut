@@ -651,10 +651,10 @@ impl GpuContext {
             }
         };
 
-        if cached_surface.size != (width, height) {
-            self.configure_surface(&cached_surface.surface, width, height)?;
-            cached_surface.size = (width, height);
-        }
+        // The compositor renders to this same canvas at its own size between
+        // calls, so the cached size can't be trusted: always reconfigure.
+        self.configure_surface(&cached_surface.surface, width, height)?;
+        cached_surface.size = (width, height);
 
         self.present_texture_to_surface(texture, &cached_surface.surface)?;
 

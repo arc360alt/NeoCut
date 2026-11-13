@@ -1,4 +1,4 @@
-- Add silence detection feature and its popup and functionality
 - Fix any remaining preformance issues
 - Add any missing features from NyxVideo to this app
+- Fix extreemly slow render times (1 hour and 30 minutes for a 45 minute video on a pretty good AMD Cpu)
 - Find more stuff to add here.

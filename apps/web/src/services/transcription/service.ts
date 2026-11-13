@@ -1,8 +1,10 @@
-import type {
-	TranscriptionLanguage,
-	TranscriptionResult,
-	TranscriptionProgress,
-	TranscriptionModelId,
+import {
+	DEFAULT_TRANSCRIPTION_OPTIONS,
+	type TranscriptionLanguage,
+	type TranscriptionOptions,
+	type TranscriptionResult,
+	type TranscriptionProgress,
+	type TranscriptionModelId,
 } from "@/transcription/types";
 import {
 	DEFAULT_TRANSCRIPTION_MODEL,
@@ -22,11 +24,13 @@ class TranscriptionService {
 		audioData,
 		language = "auto",
 		modelId = DEFAULT_TRANSCRIPTION_MODEL,
+		options = DEFAULT_TRANSCRIPTION_OPTIONS,
 		onProgress,
 	}: {
 		audioData: Float32Array;
 		language?: TranscriptionLanguage;
 		modelId?: TranscriptionModelId;
+		options?: TranscriptionOptions;
 		onProgress?: ProgressCallback;
 	}): Promise<TranscriptionResult> {
 		await this.ensureWorker({ modelId, onProgress });
@@ -55,6 +59,7 @@ class TranscriptionService {
 							text: response.text,
 							segments: response.segments,
 							language,
+							onlySoundTags: response.onlySoundTags,
 						});
 						break;
 
@@ -76,6 +81,7 @@ class TranscriptionService {
 				type: "transcribe",
 				audio: audioData,
 				language,
+				options,
 			} satisfies WorkerMessage);
 		});
 	}

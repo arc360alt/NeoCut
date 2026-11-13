@@ -5,12 +5,9 @@ import type {
 	RetimeConfig,
 	SceneTracks,
 } from "@/timeline";
-import { shouldMaintainPitch } from "@/retime/rate";
 import type { MediaAsset } from "@/media/types";
-import { applyAudioMasteringToBuffer } from "@/media/audio-mastering";
 import type { AudioCapableElement } from "@/timeline/audio-state";
 import {
-	hasAnimatedVolume,
 	isElementMuted,
 	resolveEffectiveAudioGain,
 } from "@/timeline/audio-state";
@@ -18,9 +15,7 @@ import { doesElementHaveEnabledAudio } from "@/timeline/audio-separation";
 import { canElementHaveAudio, hasMediaId } from "@/timeline/element-utils";
 import { canTrackHaveAudio } from "@/timeline";
 import { mediaSupportsAudio } from "@/media/media-utils";
-import { getSourceTimeAtClipTime, renderRetimedBuffer } from "@/retime";
 import { decodeFileAudio } from "./audio-decode";
-import { streamMixClip } from "./audio-stream-mix";
 import { TICKS_PER_SECOND } from "@/wasm";
 import {
 	computeRmsBuckets,
@@ -28,7 +23,7 @@ import {
 } from "@/media/waveform-summary";
 
 const MAX_AUDIO_CHANNELS = 2;
-const EXPORT_SAMPLE_RATE = 44100;
+export const EXPORT_SAMPLE_RATE = 44100;
 
 export interface CollectedAudioElement {
 	timelineElement: AudioCapableElement;
@@ -134,7 +129,7 @@ export function timelineHasAudio({
 	);
 }
 
-async function resolveAudioBufferForElement({
+export async function resolveAudioBufferForElement({
 	element,
 	mediaMap,
 	audioContext,
@@ -165,7 +160,7 @@ async function resolveAudioBufferForElement({
 	}
 }
 
-async function resolveAudioBufferForAsset({
+export async function resolveAudioBufferForAsset({
 	asset,
 	audioContext,
 }: {
@@ -225,7 +220,21 @@ const libraryAudioFiles = new Map<string, Promise<File>>();
  * Downloads a sound from the library once per session; playback asks for it
  * every time play is pressed.
  */
-function fetchLibraryAudioFile({
+/**
+ * Stores a library sound that was already downloaded (e.g. when it was added
+ * to the timeline), so playback and export don't download it again.
+ */
+export function rememberLibraryAudioFile({
+	sourceUrl,
+	file,
+}: {
+	sourceUrl: string;
+	file: File;
+}): void {
+	libraryAudioFiles.set(sourceUrl, Promise.resolve(file));
+}
+
+export function fetchLibraryAudioFile({
 	element,
 }: {
 	element: LibraryAudioElement;
@@ -491,139 +500,6 @@ export async function collectAudioClips({
 	return clips;
 }
 
-export async function createTimelineAudioBuffer({
-	tracks,
-	mediaAssets,
-	duration,
-	sampleRate = EXPORT_SAMPLE_RATE,
-	audioContext,
-}: {
-	tracks: SceneTracks;
-	mediaAssets: MediaAsset[];
-	duration: number;
-	sampleRate?: number;
-	audioContext?: AudioContext;
-}): Promise<AudioBuffer | null> {
-	const context = audioContext ?? createAudioContext({ sampleRate });
-	const candidates = collectAudibleCandidates({ tracks, mediaAssets }).filter(
-		({ element, mediaAsset }) =>
-			!isElementMuted({ element }) &&
-			(element.type !== "video" ||
-				(mediaAsset !== null && mediaSupportsAudio({ media: mediaAsset }))),
-	);
-	if (candidates.length === 0) return null;
-
-	const outputChannels = 2;
-	const durationSeconds = duration / TICKS_PER_SECOND;
-	const outputLength = Math.ceil(durationSeconds * sampleRate);
-	const outputBuffer = context.createBuffer(
-		outputChannels,
-		outputLength,
-		sampleRate,
-	);
-	const mediaMap = new Map<string, MediaAsset>(
-		mediaAssets.map((asset) => [asset.id, asset]),
-	);
-	// Only the fallback path holds whole decoded sources; decode each once.
-	const decodedSources = new Map<string, Promise<AudioBuffer | null>>();
-
-	// One clip at a time: a long edit can have hundreds of clips cut from the
-	// same file, and decoding them all at once exhausts memory.
-	for (const { element, mediaAsset } of candidates) {
-		const clip = {
-			timelineElement: element,
-			startTime: element.startTime / TICKS_PER_SECOND,
-			duration: element.duration / TICKS_PER_SECOND,
-			trimStart: element.trimStart / TICKS_PER_SECOND,
-			trimEnd: element.trimEnd / TICKS_PER_SECOND,
-			volume: resolveEffectiveAudioGain({
-				element,
-				trackMuted: false,
-				localTime: 0,
-			}),
-			muted: false,
-			retime: element.retime,
-		};
-		const preservesPitch = shouldMaintainPitch({
-			rate: element.retime?.rate ?? 1,
-			maintainPitch: element.retime?.maintainPitch,
-		});
-
-		if (!preservesPitch) {
-			const file = await getElementAudioFile({ element, mediaAsset }).catch(
-				(error: unknown) => {
-					console.warn("Failed to load clip audio:", error);
-					return null;
-				},
-			);
-			const mixed = file
-				? await streamMixClip({ clip: { ...clip, file }, outputBuffer }).catch(
-						(error: unknown) => {
-							console.warn("Streaming audio mix failed:", error);
-							return false;
-						},
-					)
-				: false;
-			if (mixed) continue;
-		}
-
-		const sourceKey =
-			element.type === "audio" && element.sourceType === "library"
-				? `library:${element.sourceUrl}`
-				: `media:${mediaAsset?.id ?? element.id}`;
-		let decoded = decodedSources.get(sourceKey);
-		if (!decoded) {
-			decoded =
-				element.type === "audio"
-					? resolveAudioBufferForElement({ element, mediaMap, audioContext: context })
-					: mediaAsset
-						? resolveAudioBufferForAsset({ asset: mediaAsset, audioContext: context })
-						: Promise.resolve(null);
-			decodedSources.set(sourceKey, decoded);
-		}
-		const buffer = await decoded;
-		if (!buffer) continue;
-
-		const collected: CollectedAudioElement = { ...clip, buffer };
-		const renderedBuffer = preservesPitch
-			? await renderRetimedBuffer({
-					audioContext: context,
-					sourceBuffer: buffer,
-					trimStart: collected.trimStart,
-					clipDuration: collected.duration,
-					retime: collected.retime,
-					maintainPitch: true,
-				})
-			: undefined;
-
-		mixAudioChannels({
-			element: collected,
-			buffer: renderedBuffer ?? buffer,
-			trimStart: renderedBuffer ? 0 : collected.trimStart,
-			retime: renderedBuffer ? undefined : collected.retime,
-			outputBuffer,
-			outputLength,
-			sampleRate,
-		});
-	}
-
-	return await applyAudioMasteringToBuffer({ audioBuffer: outputBuffer });
-}
-
-/** The file holding a clip's audio: its media, or the downloaded library sound. */
-async function getElementAudioFile({
-	element,
-	mediaAsset,
-}: {
-	element: AudioCapableElement;
-	mediaAsset: MediaAsset | null;
-}): Promise<Blob | null> {
-	if (element.type === "audio" && element.sourceType === "library") {
-		return fetchLibraryAudioFile({ element });
-	}
-	return mediaAsset?.file ?? null;
-}
-
 function collectPeakRange({
 	buffer,
 	count,
@@ -750,57 +626,3 @@ export function extractRmsRange({
 	});
 }
 
-function mixAudioChannels({
-	element,
-	buffer,
-	trimStart,
-	retime,
-	outputBuffer,
-	outputLength,
-	sampleRate,
-}: {
-	element: CollectedAudioElement;
-	buffer: AudioBuffer;
-	trimStart: number;
-	retime?: RetimeConfig;
-	outputBuffer: AudioBuffer;
-	outputLength: number;
-	sampleRate: number;
-}): void {
-	const { startTime, duration: elementDuration } = element;
-
-	const outputStartSample = Math.floor(startTime * sampleRate);
-	const renderedLength = Math.ceil(elementDuration * sampleRate);
-
-	const outputChannels = 2;
-	for (let channel = 0; channel < outputChannels; channel++) {
-		const outputData = outputBuffer.getChannelData(channel);
-		const sourceChannel = Math.min(channel, buffer.numberOfChannels - 1);
-		const sourceData = buffer.getChannelData(sourceChannel);
-
-		for (let i = 0; i < renderedLength; i++) {
-			const outputIndex = outputStartSample + i;
-			if (outputIndex >= outputLength) break;
-
-			const clipTime = i / sampleRate;
-			const sourceTime =
-				trimStart + getSourceTimeAtClipTime({ clipTime, retime });
-			const sourceIndex = sourceTime * buffer.sampleRate;
-			if (sourceIndex >= sourceData.length) break;
-
-			const lowerIndex = Math.floor(sourceIndex);
-			const upperIndex = Math.min(sourceData.length - 1, lowerIndex + 1);
-			const fraction = sourceIndex - lowerIndex;
-			const gain = hasAnimatedVolume({ element: element.timelineElement })
-				? resolveEffectiveAudioGain({
-						element: element.timelineElement,
-						localTime: clipTime,
-					})
-				: element.volume;
-			outputData[outputIndex] +=
-				(sourceData[lowerIndex] * (1 - fraction) +
-					sourceData[upperIndex] * fraction) *
-				gain;
-		}
-	}
-}

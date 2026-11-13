@@ -9,6 +9,7 @@ import {
 	hasAnimatedVolume,
 } from "@/timeline/audio-state";
 import { createAudioMasteringChain } from "@/media/audio-mastering";
+import { flattenCompoundTracks } from "@/compound/flatten";
 import {
 	getClipTimeAtSourceTime,
 	getSourceTimeAtClipTime,
@@ -22,6 +23,9 @@ import {
 	InputDisposedError,
 	type WrappedAudioBuffer,
 } from "mediabunny";
+
+/** Wait after an edit or seek before opening files, so rapid edits don't thrash. */
+const WARM_UP_DELAY_MS = 400;
 
 export class AudioManager {
 	private audioContext: AudioContext | null = null;
@@ -42,6 +46,8 @@ export class AudioManager {
 	private queuedSources = new Set<AudioBufferSourceNode>();
 	private preparedClipBuffers = new Map<string, Promise<AudioBuffer | null>>();
 	private decodedBuffers = new Map<string, Promise<AudioBuffer | null>>();
+	/** Source keys that are media asset ids (vs library-sound element ids). */
+	private knownAssetKeys = new Set<string>();
 	private playbackSessionId = 0;
 	private lastIsPlaying = false;
 	private lastVolume = 1;
@@ -50,6 +56,7 @@ export class AudioManager {
 
 	constructor(private editor: EditorCore) {
 		this.lastVolume = this.editor.playback.getVolume();
+		this.wakeAudioOnInteraction();
 
 		this.unsubscribers.push(
 			this.editor.playback.subscribe(this.handlePlaybackChange),
@@ -57,6 +64,31 @@ export class AudioManager {
 			this.editor.media.subscribe(this.handleTimelineChange),
 			this.editor.playback.onSeek(this.handleSeek),
 		);
+	}
+
+	/**
+	 * Browsers only let audio start after a click or key press, and opening
+	 * (or waking) the sound device can take a moment. Doing it on any
+	 * interaction, not just Play, means it's ready when Play is pressed.
+	 */
+	private wakeAudioOnInteraction(): void {
+		if (typeof window === "undefined") return;
+		const wake = () => {
+			if (document.visibilityState !== "visible") return;
+			const context = this.ensureAudioContext();
+			if (context?.state === "suspended") {
+				void context.resume().catch(() => {});
+			}
+		};
+		const options: AddEventListenerOptions = { capture: true, passive: true };
+		window.addEventListener("pointerdown", wake, options);
+		window.addEventListener("keydown", wake, options);
+		document.addEventListener("visibilitychange", wake);
+		this.unsubscribers.push(() => {
+			window.removeEventListener("pointerdown", wake, options);
+			window.removeEventListener("keydown", wake, options);
+			document.removeEventListener("visibilitychange", wake);
+		});
 	}
 
 	dispose(): void {
@@ -108,14 +140,100 @@ export class AudioManager {
 		}
 
 		this.stopPlayback();
+		this.scheduleWarmUp();
 	};
 
-	private handleTimelineChange = (): void => {
-		this.disposeSinks();
-		this.preparedClipBuffers.clear();
-		this.decodedBuffers.clear();
+	private warmUpTimer: ReturnType<typeof setTimeout> | null = null;
 
-		if (!this.editor.playback.getIsPlaying()) return;
+	/**
+	 * While paused, opens the files the timeline plays, so pressing Play can
+	 * start sound right away instead of after each file is opened.
+	 */
+	private scheduleWarmUp(): void {
+		if (typeof window === "undefined") return;
+		if (this.warmUpTimer) clearTimeout(this.warmUpTimer);
+		this.warmUpTimer = setTimeout(() => {
+			this.warmUpTimer = null;
+			void this.warmUp();
+		}, WARM_UP_DELAY_MS);
+	}
+
+	private async warmUp(): Promise<void> {
+		if (this.editor.playback.getIsPlaying()) return;
+		const scene = this.editor.scenes.getActiveSceneOrNull();
+		if (!scene) return;
+		try {
+			const clips = await collectAudioClips({
+				tracks: flattenCompoundTracks({
+					tracks: scene.tracks,
+					scenes: this.editor.scenes.getScenes(),
+				}),
+				mediaAssets: this.editor.media.getAssets(),
+			});
+			for (const clip of clips) {
+				if (clip.muted || this.shouldUsePreparedClipBuffer({ clip })) continue;
+				if (this.editor.playback.getIsPlaying()) return;
+				await this.getAudioSink({ clip });
+			}
+		} catch (error) {
+			console.warn("Audio warm-up failed:", error);
+		}
+	}
+
+	/** Closes files (and drops decoded audio) the project no longer uses. */
+	private releaseUnusedSources(): void {
+		const scene = this.editor.scenes.getActiveSceneOrNull();
+		const used = new Set<string>();
+		if (scene) {
+			const tracks = flattenCompoundTracks({
+				tracks: scene.tracks,
+				scenes: this.editor.scenes.getScenes(),
+			});
+			for (const track of [...tracks.overlay, tracks.main, ...tracks.audio]) {
+				for (const element of track.elements) {
+					// Uploaded media is keyed by asset, library sounds by element.
+					used.add("mediaId" in element ? element.mediaId : element.id);
+				}
+			}
+		}
+		const assetIds = new Set(this.editor.media.getAssets().map((asset) => asset.id));
+		const isUsed = (key: string) => used.has(key) && (assetIds.has(key) || !this.isAssetKey(key));
+
+		for (const [key, input] of [...this.inputs]) {
+			if (isUsed(key)) continue;
+			input.dispose();
+			this.inputs.delete(key);
+			this.sinks.delete(key);
+		}
+		for (const key of [...this.decodedBuffers.keys()]) {
+			if (!isUsed(key)) this.decodedBuffers.delete(key);
+		}
+		// Prepared buffers depend on the clip's trim and speed (in their key),
+		// so edited clips simply miss; drop ones whose file is gone.
+		for (const key of [...this.preparedClipBuffers.keys()]) {
+			const parsed: unknown = JSON.parse(key);
+			const sourceKey =
+				typeof parsed === "object" && parsed !== null && "sourceKey" in parsed
+					? String(parsed.sourceKey)
+					: "";
+			if (!isUsed(sourceKey)) this.preparedClipBuffers.delete(key);
+		}
+	}
+
+	private isAssetKey(key: string): boolean {
+		return this.knownAssetKeys.has(key);
+	}
+
+	private handleTimelineChange = (): void => {
+		// Opened files and decoded audio are keyed by file, so they stay valid
+		// across edits. Throwing them all away made every Play after any edit
+		// reopen (and re-index) each file first, so sound started late.
+		this.releaseUnusedSources();
+
+		if (!this.editor.playback.getIsPlaying()) {
+			this.scheduleWarmUp();
+			return;
+		}
 
 		void this.startPlayback({
 			time: this.editor.playback.getCurrentTime() / TICKS_PER_SECOND,
@@ -156,7 +274,10 @@ export class AudioManager {
 		this.playbackSessionId++;
 		this.playbackLatencyCompensationSeconds = 0;
 
-		const tracks = this.editor.scenes.getActiveScene().tracks;
+		const tracks = flattenCompoundTracks({
+			tracks: this.editor.scenes.getActiveScene().tracks,
+			scenes: this.editor.scenes.getScenes(),
+		});
 		const mediaAssets = this.editor.media.getAssets();
 		const duration = this.editor.timeline.getTotalDuration();
 
@@ -169,7 +290,13 @@ export class AudioManager {
 		this.clips = await collectAudioClips({ tracks, mediaAssets });
 		if (!this.editor.playback.getIsPlaying()) return;
 
-		this.playbackStartTime = time;
+		// The video kept playing while the audio device woke up and clips were
+		// gathered; start sound where the video is now, not where it was when
+		// Play was pressed, or it stays behind the picture by that wait.
+		this.playbackStartTime = Math.max(
+			time,
+			this.editor.playback.getCurrentTime() / TICKS_PER_SECOND,
+		);
 		this.playbackStartContextTime = audioContext.currentTime;
 
 		this.scheduleUpcomingClips();
@@ -644,6 +771,7 @@ export class AudioManager {
 			const sink = new AudioBufferSink(audioTrack);
 			this.inputs.set(clip.sourceKey, input);
 			this.sinks.set(clip.sourceKey, sink);
+			if (clip.sourceKey !== clip.id) this.knownAssetKeys.add(clip.sourceKey);
 			return sink;
 		} catch (error) {
 			console.warn("Failed to initialize audio sink:", error);

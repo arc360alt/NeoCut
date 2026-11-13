@@ -61,6 +61,8 @@ export type ExternalTextureDescriptor = {
 	 * recycle the same canvas object for later frames.
 	 */
 	version?: number;
+	/** Fully opaque pixels (decoded video), so nothing beneath shows through. */
+	opaque?: boolean;
 };
 
 /**

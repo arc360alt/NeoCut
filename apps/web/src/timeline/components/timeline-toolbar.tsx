@@ -9,7 +9,6 @@ import {
 import { Button } from "@/components/ui/button";
 import {
 	SplitButton,
-	SplitButtonLeft,
 	SplitButtonRight,
 	SplitButtonSeparator,
 } from "@/components/ui/split-button";
@@ -44,12 +43,14 @@ import {
 	Layers01Icon,
 	Chart03Icon,
 	Unlink02Icon,
+	ArrowLeft01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { OcRippleIcon } from "@/components/icons";
 import { GraphEditorPopover } from "./graph-editor/popover";
 import { PopoverTrigger } from "@/components/ui/popover";
 import { useGraphEditorController } from "./graph-editor/use-controller";
+import { useRef, useState } from "react";
 
 export function TimelineToolbar({
 	zoomLevel,
@@ -257,15 +258,74 @@ function ToolbarLeftSection() {
 
 function SceneSelector() {
 	const editor = useEditor();
-	const currentScene = editor.scenes.getActiveScene();
+	const currentScene = useEditor((e) => e.scenes.getActiveSceneOrNull());
+	const mainScene = useEditor((e) => e.scenes.getScenes().find((scene) => scene.isMain));
+	// Text being typed; null when not editing.
+	const [draft, setDraft] = useState<string | null>(null);
+	const isCancellingRef = useRef(false);
+	const name = currentScene?.name ?? "No Scene";
+	const shown = draft ?? name;
+
+	const commit = () => {
+		const next = draft?.trim();
+		const scene = currentScene;
+		setDraft(null);
+		// Escape is caught by the global shortcut listener, which blurs the box
+		// before the key reaches it. Decide on the next tick, once the key
+		// handler has had the chance to mark this blur as a cancel.
+		setTimeout(() => {
+			if (isCancellingRef.current) {
+				isCancellingRef.current = false;
+				return;
+			}
+			if (scene && next && next !== scene.name) {
+				void editor.scenes.renameScene({ sceneId: scene.id, name: next });
+			}
+		}, 0);
+	};
 
 	return (
-		<div>
+		<div className="flex items-center gap-1">
+			{currentScene && !currentScene.isMain && mainScene && (
+				<Button
+					variant="ghost"
+					size="icon"
+					className="size-7"
+					aria-label={`Back to ${mainScene.name}`}
+					title={`Back to ${mainScene.name}`}
+					onClick={() => void editor.scenes.switchToScene({ sceneId: mainScene.id })}
+				>
+					<HugeiconsIcon icon={ArrowLeft01Icon} className="size-4" />
+				</Button>
+			)}
 			<SplitButton className="border-foreground/10 border">
-				<SplitButtonLeft>{currentScene?.name || "No Scene"}</SplitButtonLeft>
+				<input
+					aria-label="Scene name (click to rename)"
+					title="Click to rename"
+					className="bg-accent hover:bg-foreground/5 focus:bg-background h-full min-w-16 px-3 text-sm outline-none"
+					style={{ width: `${Math.max(6, shown.length + 2)}ch` }}
+					value={shown}
+					disabled={!currentScene}
+					onFocus={(event) => {
+						setDraft(name);
+						event.currentTarget.select();
+					}}
+					onChange={(event) => setDraft(event.currentTarget.value)}
+					onBlur={commit}
+					onKeyDown={(event) => {
+						// Typing a name must not trigger editor shortcuts.
+						event.stopPropagation();
+						if (event.key === "Enter") event.currentTarget.blur();
+						if (event.key === "Escape") {
+							isCancellingRef.current = true;
+							setDraft(null);
+							event.currentTarget.blur();
+						}
+					}}
+				/>
 				<SplitButtonSeparator />
 				<ScenesView>
-					<SplitButtonRight onClick={() => {}}>
+					<SplitButtonRight onClick={() => {}} aria-label="Scenes" title="Scenes">
 						<HugeiconsIcon icon={Layers01Icon} className="size-4" />
 					</SplitButtonRight>
 				</ScenesView>

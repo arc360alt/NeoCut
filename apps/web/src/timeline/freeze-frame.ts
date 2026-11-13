@@ -111,13 +111,13 @@ async function captureVideoFrame({
 		return null;
 	}
 
-	// Copy right away: the cache reuses its frame canvas for later seeks.
-	const canvas = new OffscreenCanvas(frame.canvas.width, frame.canvas.height);
+	// Copy right away: the cache recycles its frames for later seeks.
+	const canvas = new OffscreenCanvas(frame.width, frame.height);
 	const ctx = canvas.getContext("2d");
 	if (!ctx) {
 		return null;
 	}
-	ctx.drawImage(frame.canvas, 0, 0);
+	ctx.drawImage(frame.source, 0, 0, frame.width, frame.height);
 	return canvas.convertToBlob({ type: "image/png" });
 }
 

@@ -169,7 +169,12 @@ pub fn render_frame(options: JsValue) -> Result<(), JsValue> {
                 ));
             };
 
-            if runtime.surface_size != (frame.width, frame.height) {
+            // On WebGL the canvas is shared with effect thumbnails, which
+            // resize it; trust its real size, not just the cached one.
+            let canvas_size = (runtime.canvas.width(), runtime.canvas.height());
+            if runtime.surface_size != (frame.width, frame.height)
+                || canvas_size != (frame.width, frame.height)
+            {
                 runtime.canvas.set_width(frame.width);
                 runtime.canvas.set_height(frame.height);
                 let t_surface = perf::now_ms();

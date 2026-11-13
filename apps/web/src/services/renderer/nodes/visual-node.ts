@@ -3,7 +3,7 @@ import type { Effect, EffectPass } from "@/effects/types";
 import type { Mask } from "@/masks/types";
 import type { BlendMode, Transform } from "@/rendering";
 import type { ParamValues } from "@/params";
-import type { RetimeConfig, VisualElement } from "@/timeline";
+import type { CompoundElement, RetimeConfig, VisualElement } from "@/timeline";
 import type { TransitionLayerState } from "@/transitions";
 import type { Adjustments } from "@/adjustments";
 
@@ -33,6 +33,11 @@ export interface VisualNodeParams {
 	transitionOut?: NodeTransition;
 	/** Base color/blur adjustments, before keyframes. */
 	adjustments?: Adjustments;
+	/**
+	 * Compound clips (outermost first) this node sits inside; their transform,
+	 * opacity and effects apply on top of its own.
+	 */
+	compoundParents?: readonly CompoundElement[];
 }
 
 export interface ResolvedVisualNodeState {
@@ -49,6 +54,8 @@ export interface ResolvedVisualSourceNodeState extends ResolvedVisualNodeState {
 	source: CanvasImageSource;
 	/** Timestamp of a decoded video frame; its canvas may be reused later. */
 	sourceVersion?: number;
+	/** False when the source has transparent pixels (only tracked for video). */
+	sourceOpaque?: boolean;
 	sourceWidth: number;
 	sourceHeight: number;
 }

@@ -139,6 +139,23 @@ function getElementBounds({
 		});
 	}
 
+	if (element.type === "compound") {
+		// A compound clip is a full frame of its scene, like a video that fills
+		// the canvas; its transform moves and scales that frame.
+		const transform = resolveTransformAtTime({
+			baseTransform: buildTransformFromParams({ params: element.params }),
+			animations: element.animations,
+			localTime,
+		});
+		return getVisualElementBounds({
+			canvasWidth,
+			canvasHeight,
+			sourceWidth: canvasWidth,
+			sourceHeight: canvasHeight,
+			transform,
+		});
+	}
+
 	if (element.type === "sticker") {
 		const transform = resolveTransformAtTime({
 			baseTransform: buildTransformFromParams({ params: element.params }),
@@ -201,7 +218,7 @@ function getElementBounds({
 export const ROTATION_HANDLE_OFFSET = 24;
 
 export type Corner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
-export type Edge = "right" | "left" | "bottom";
+export type Edge = "top" | "right" | "bottom" | "left";
 
 export function getCornerPosition({
 	bounds,
@@ -238,7 +255,7 @@ export function getEdgeHandlePosition({
 	const cos = Math.cos(angleRad);
 	const sin = Math.sin(angleRad);
 	const localX = edge === "right" ? halfWidth : edge === "left" ? -halfWidth : 0;
-	const localY = edge === "bottom" ? halfHeight : 0;
+	const localY = edge === "bottom" ? halfHeight : edge === "top" ? -halfHeight : 0;
 	return {
 		x: bounds.cx + (localX * cos - localY * sin),
 		y: bounds.cy + (localX * sin + localY * cos),

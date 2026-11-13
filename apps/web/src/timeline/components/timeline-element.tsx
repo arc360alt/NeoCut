@@ -2,6 +2,7 @@
 
 import { createContext, useContext } from "react";
 import { useEditor } from "@/editor/use-editor";
+import { EditorCore } from "@/core";
 import { useAssetsPanelStore } from "@/components/editor/panels/assets/assets-panel-store";
 import { AudioWaveform, WAVEFORM_GAIN_SAMPLE_COUNT } from "./audio-waveform";
 import { AudioVolumeLine } from "./audio-volume-line";
@@ -73,6 +74,7 @@ import {
 	Exchange01Icon,
 	KeyframeIcon,
 	MagicWand05Icon,
+	Layers01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { uppercase } from "@/utils/string";
@@ -432,6 +434,23 @@ export const TimelineElement = memo(function TimelineElement({
 						Split
 					</ActionMenuItem>
 					<CopyMenuItem />
+					<ActionMenuItem
+						action="create-compound-clip"
+						icon={<HugeiconsIcon icon={Layers01Icon} />}
+					>
+						Create compound clip
+					</ActionMenuItem>
+					{element.type === "compound" && (
+						<ContextMenuItem
+							icon={<HugeiconsIcon icon={Layers01Icon} />}
+							onClick={(event: React.MouseEvent) => {
+								event.stopPropagation();
+								openCompoundScene({ sceneId: element.sceneId });
+							}}
+						>
+							Open compound clip
+						</ContextMenuItem>
+					)}
 					{selectedCount === 1 && (
 						<ActionMenuItem
 							action="duplicate-selected"
@@ -583,6 +602,16 @@ function ElementInner({
 						className="absolute inset-0 size-full flex flex-col"
 						onClick={(event) => onElementClick({ event, element })}
 						onMouseDown={(event) => onElementMouseDown({ event, element })}
+						onDoubleClick={
+							element.type === "compound"
+								? () => openCompoundScene({ sceneId: element.sceneId })
+								: undefined
+						}
+						title={
+							element.type === "compound"
+								? "Double-click to open this compound clip's scene"
+								: undefined
+						}
 					>
 						<div
 							className={cn(
@@ -1180,7 +1209,29 @@ function ElementContent({ element, track }: ElementContentProps) {
 		case "video":
 		case "image":
 			return <TiledMediaContent element={element} track={track} />;
+		case "compound":
+			return <CompoundElementContent element={element} />;
 	}
+}
+
+function openCompoundScene({ sceneId }: { sceneId: string }) {
+	void EditorCore.getInstance().scenes.switchToScene({ sceneId });
+}
+
+function CompoundElementContent({
+	element,
+}: {
+	element: Extract<TimelineElementType, { type: "compound" }>;
+}) {
+	const sceneName = useEditor(
+		(e) => e.scenes.getScenes().find((scene) => scene.id === element.sceneId)?.name,
+	);
+	return (
+		<div className="flex size-full items-center gap-1.5 bg-violet-600/80 pl-2 text-white">
+			<HugeiconsIcon icon={Layers01Icon} className="size-3.5 shrink-0" />
+			<span className="truncate text-xs">{sceneName ?? "Missing scene"}</span>
+		</div>
+	);
 }
 
 function CopyMenuItem() {

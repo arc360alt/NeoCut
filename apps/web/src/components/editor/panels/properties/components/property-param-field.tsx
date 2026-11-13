@@ -23,7 +23,9 @@ import {
 } from "@/components/ui/select";
 import { usePropertyDraft } from "../hooks/use-property-draft";
 import { KeyframeToggle } from "./keyframe-toggle";
+import { FontPicker } from "@/components/ui/font-picker";
 import { Textarea } from "@/components/ui/textarea";
+import { useState } from "react";
 
 export function PropertyParamField({
 	param,
@@ -138,21 +140,20 @@ function ParamInput({
 
 	if (param.type === "text") {
 		return (
-			<Textarea
-				value={String(value)}
-				onChange={(event) => onPreview(event.currentTarget.value)}
-				onBlur={onCommit}
-			/>
+			<TextParamField value={String(value)} onPreview={onPreview} onCommit={onCommit} />
 		);
 	}
 
 	if (param.type === "font") {
 		return (
-			<input
-				className="border-input bg-accent h-9 w-full rounded-md border px-3 text-sm outline-none"
-				value={String(value)}
-				onChange={(event) => onPreview(event.currentTarget.value)}
-				onBlur={onCommit}
+			<FontPicker
+				// Remount when the value changes elsewhere (undo, another element).
+				key={String(value)}
+				defaultValue={String(value)}
+				onValueChange={(family) => {
+					onPreview(family);
+					onCommit();
+				}}
 			/>
 		);
 	}
@@ -219,6 +220,39 @@ function NumberParamField({
 			onScrub={previewFromDisplay}
 			onScrubEnd={onCommit}
 			onReset={handleReset}
+		/>
+	);
+}
+
+/**
+ * Keeps what's being typed in its own state. The edit is only previewed
+ * until the box loses focus, and the panel doesn't re-render for previews,
+ * so showing `value` directly would snap the box back to the old text after
+ * every keystroke.
+ */
+function TextParamField({
+	value,
+	onPreview,
+	onCommit,
+}: {
+	value: string;
+	onPreview: (value: string) => void;
+	onCommit: () => void;
+}) {
+	const [draft, setDraft] = useState<string | null>(null);
+	return (
+		<Textarea
+			value={draft ?? value}
+			onFocus={() => setDraft(value)}
+			onChange={(event) => {
+				const next = event.currentTarget.value;
+				setDraft(next);
+				onPreview(next);
+			}}
+			onBlur={() => {
+				setDraft(null);
+				onCommit();
+			}}
 		/>
 	);
 }

@@ -1,6 +1,7 @@
 import type { DragEvent } from "react";
 import { processMediaAssets } from "@/media/processing";
 import { showMediaUploadToast } from "@/media/upload-toast";
+import { isExternalFileDrag, readDroppedFiles } from "@/media/drop-files";
 import {
 	DEFAULT_NEW_ELEMENT_DURATION,
 	toElementDurationTicks,
@@ -195,7 +196,7 @@ export class DragDropController {
 	onDragEnter(event: DragEvent): void {
 		event.preventDefault();
 		const hasAsset = this.config.dragSource.isActive();
-		const hasFiles = event.dataTransfer.types.includes("Files");
+		const hasFiles = isExternalFileDrag({ dataTransfer: event.dataTransfer });
 		if (!hasAsset && !hasFiles) return;
 
 		this.enterCount += 1;
@@ -211,7 +212,7 @@ export class DragDropController {
 		if (!coords) return;
 
 		const dragData = this.config.dragSource.getActive();
-		const hasFiles = event.dataTransfer.types.includes("Files");
+		const hasFiles = isExternalFileDrag({ dataTransfer: event.dataTransfer });
 		const isExternal = hasFiles && !dragData;
 
 		if (!dragData) {
@@ -272,7 +273,8 @@ export class DragDropController {
 		this.enterCount = 0;
 
 		const dragData = this.config.dragSource.getActive();
-		const hasFiles = event.dataTransfer.files?.length > 0;
+		const hasFiles =
+			!dragData && isExternalFileDrag({ dataTransfer: event.dataTransfer });
 		if (!dragData && !hasFiles) return;
 
 		const currentTarget = this.dropTarget;
@@ -285,10 +287,12 @@ export class DragDropController {
 				return;
 			}
 
+			const files = readDroppedFiles({ dataTransfer: event.dataTransfer });
+			if (files.length === 0) return;
 			const coords = this.getMouseTimelineCoords({ event });
 			if (!coords) return;
 			this.executeFileDrop({
-				files: Array.from(event.dataTransfer.files),
+				files,
 				mouseX: coords.mouseX,
 				mouseY: coords.mouseY,
 			}).catch((error) => {

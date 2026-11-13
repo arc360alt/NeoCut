@@ -29,6 +29,7 @@ import {
 	type ScopeEntry,
 } from "@/selection/scope";
 import { useCommittedRef } from "@/hooks/use-committed-ref";
+import { CreateCompoundClipCommand } from "@/commands/timeline/create-compound-clip";
 
 export function useEditorActions() {
 	const editor = useEditor();
@@ -450,6 +451,17 @@ export function useEditorActions() {
 		() => {
 			editor.timeline.duplicateElements({
 				elements: selectedElements,
+			});
+		},
+		undefined,
+	);
+
+	useActionHandler(
+		"create-compound-clip",
+		() => {
+			if (selectedElements.length === 0) return;
+			editor.command.execute({
+				command: new CreateCompoundClipCommand({ selected: selectedElements }),
 			});
 		},
 		undefined,

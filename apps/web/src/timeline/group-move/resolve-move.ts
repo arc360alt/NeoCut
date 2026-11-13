@@ -2,6 +2,7 @@ import type { SceneTracks } from "@/timeline";
 import { getTrackTypeForElementType } from "@/timeline/placement/compatibility";
 import { canPlaceTimeSpansOnTrack } from "@/timeline/placement/overlap";
 import type {
+	GroupMember,
 	GroupMoveResult,
 	MoveGroup,
 	PlannedElementMove,
@@ -30,6 +31,39 @@ type GroupMoveTarget =
 			anchorInsertIndex: number;
 			newTrackIds: string[];
 	  };
+
+/**
+ * The selected clips grouped by the track they come from, top to bottom.
+ * Clips that share a track move together as one row and land on one track,
+ * keeping their spacing; placing them one by one would give each its own
+ * track.
+ */
+interface MemberRow {
+	trackId: string;
+	displayIndex: number;
+	elementType: GroupMember["elementType"];
+	trackSection: GroupMember["trackSection"];
+	members: GroupMember[];
+}
+
+function groupMembersIntoRows({ group }: { group: MoveGroup }): MemberRow[] {
+	const rows = new Map<string, MemberRow>();
+	for (const member of group.members) {
+		const row = rows.get(member.trackId);
+		if (row) {
+			row.members.push(member);
+		} else {
+			rows.set(member.trackId, {
+				trackId: member.trackId,
+				displayIndex: member.displayIndex,
+				elementType: member.elementType,
+				trackSection: member.trackSection,
+				members: [member],
+			});
+		}
+	}
+	return [...rows.values()].sort((a, b) => a.displayIndex - b.displayIndex);
+}
 
 export function resolveGroupMove({
 	group,
@@ -133,23 +167,16 @@ function resolveNewTrackMove({
 	anchorInsertIndex: number;
 	newTrackIds: string[];
 }): GroupMoveResult | null {
-	const sortedMembers = [...group.members].sort(
-		(leftMember, rightMember) =>
-			leftMember.displayIndex - rightMember.displayIndex,
+	const rows = groupMembersIntoRows({ group });
+	const anchorMemberIndex = rows.findIndex(
+		(row) => row.trackId === group.anchor.trackId,
 	);
-	const anchorMemberIndex = sortedMembers.findIndex(
-		(member) => member.elementId === group.anchor.elementId,
-	);
-	if (anchorMemberIndex < 0 || newTrackIds.length < sortedMembers.length) {
+	if (anchorMemberIndex < 0 || newTrackIds.length < rows.length) {
 		return null;
 	}
 
-	const hasAudioMember = sortedMembers.some(
-		(member) => member.trackSection === "audio",
-	);
-	const hasNonAudioMember = sortedMembers.some(
-		(member) => member.trackSection !== "audio",
-	);
+	const hasAudioMember = rows.some((row) => row.trackSection === "audio");
+	const hasNonAudioMember = rows.some((row) => row.trackSection !== "audio");
 	if (hasAudioMember && hasNonAudioMember) {
 		return null;
 	}
@@ -170,24 +197,22 @@ function resolveNewTrackMove({
 				Math.min(anchorInsertIndex - anchorMemberIndex, tracks.overlay.length),
 			);
 
-	const createTracks: PlannedTrackCreation[] = sortedMembers.map(
-		(member, memberIndex) => ({
-			id: newTrackIds[memberIndex],
-			type: getTrackTypeForElementType({
-				elementType: member.elementType,
-			}),
-			index: blockStartIndex + memberIndex,
-		}),
-	);
-	const moves = sortedMembers.map((member, memberIndex) => ({
-		sourceTrackId: member.trackId,
-		targetTrackId: newTrackIds[memberIndex],
-		elementId: member.elementId,
-		newStartTime: addMediaTime({
-			a: clampedAnchorStartTime,
-			b: member.timeOffset,
-		}),
+	const createTracks: PlannedTrackCreation[] = rows.map((row, rowIndex) => ({
+		id: newTrackIds[rowIndex],
+		type: getTrackTypeForElementType({ elementType: row.elementType }),
+		index: blockStartIndex + rowIndex,
 	}));
+	const moves = rows.flatMap((row, rowIndex) =>
+		row.members.map((member) => ({
+			sourceTrackId: member.trackId,
+			targetTrackId: newTrackIds[rowIndex],
+			elementId: member.elementId,
+			newStartTime: addMediaTime({
+				a: clampedAnchorStartTime,
+				b: member.timeOffset,
+			}),
+		})),
+	);
 
 	return {
 		moves,
@@ -222,19 +247,12 @@ function resolveExistingTrackIdsByElementId({
 	tracks: SceneTracks;
 	anchorTargetDisplayIndex: number;
 }): Map<string, string> | null {
-	const sortedMembers = [...group.members].sort(
-		(leftMember, rightMember) =>
-			leftMember.displayIndex - rightMember.displayIndex,
-	);
-	const anchorMemberIndex = sortedMembers.findIndex(
-		(member) => member.elementId === group.anchor.elementId,
-	);
-	if (anchorMemberIndex < 0) {
+	const rows = groupMembersIntoRows({ group });
+	const anchorRowIndex = rows.findIndex((row) => row.trackId === group.anchor.trackId);
+	if (anchorRowIndex < 0) {
 		return null;
 	}
 
-	const targetTrackIdsByElementId = new Map<string, string>();
-	const usedTrackIds = new Set<string>();
 	const anchorPlacement = getTrackPlacementByDisplayIndex({
 		tracks,
 		displayIndex: anchorTargetDisplayIndex,
@@ -243,23 +261,17 @@ function resolveExistingTrackIdsByElementId({
 		return null;
 	}
 
-	targetTrackIdsByElementId.set(
-		group.anchor.elementId,
-		anchorPlacement.trackId,
-	);
-	usedTrackIds.add(anchorPlacement.trackId);
+	const targetTrackIdByRow = new Map<number, string>([
+		[anchorRowIndex, anchorPlacement.trackId],
+	]);
+	const usedTrackIds = new Set<string>([anchorPlacement.trackId]);
 
 	let upperBoundaryIndex = anchorTargetDisplayIndex;
-	for (
-		let memberIndex = anchorMemberIndex - 1;
-		memberIndex >= 0;
-		memberIndex -= 1
-	) {
-		const member = sortedMembers[memberIndex];
+	for (let rowIndex = anchorRowIndex - 1; rowIndex >= 0; rowIndex -= 1) {
 		const targetPlacement = findCompatibleTrackPlacement({
 			tracks,
 			requiredTrackType: getTrackTypeForElementType({
-				elementType: member.elementType,
+				elementType: rows[rowIndex].elementType,
 			}),
 			startDisplayIndex: upperBoundaryIndex - 1,
 			step: -1,
@@ -268,23 +280,17 @@ function resolveExistingTrackIdsByElementId({
 		if (!targetPlacement) {
 			return null;
 		}
-
-		targetTrackIdsByElementId.set(member.elementId, targetPlacement.trackId);
+		targetTrackIdByRow.set(rowIndex, targetPlacement.trackId);
 		usedTrackIds.add(targetPlacement.trackId);
 		upperBoundaryIndex = targetPlacement.displayIndex;
 	}
 
 	let lowerBoundaryIndex = anchorTargetDisplayIndex;
-	for (
-		let memberIndex = anchorMemberIndex + 1;
-		memberIndex < sortedMembers.length;
-		memberIndex += 1
-	) {
-		const member = sortedMembers[memberIndex];
+	for (let rowIndex = anchorRowIndex + 1; rowIndex < rows.length; rowIndex += 1) {
 		const targetPlacement = findCompatibleTrackPlacement({
 			tracks,
 			requiredTrackType: getTrackTypeForElementType({
-				elementType: member.elementType,
+				elementType: rows[rowIndex].elementType,
 			}),
 			startDisplayIndex: lowerBoundaryIndex + 1,
 			step: 1,
@@ -293,12 +299,19 @@ function resolveExistingTrackIdsByElementId({
 		if (!targetPlacement) {
 			return null;
 		}
-
-		targetTrackIdsByElementId.set(member.elementId, targetPlacement.trackId);
+		targetTrackIdByRow.set(rowIndex, targetPlacement.trackId);
 		usedTrackIds.add(targetPlacement.trackId);
 		lowerBoundaryIndex = targetPlacement.displayIndex;
 	}
 
+	const targetTrackIdsByElementId = new Map<string, string>();
+	rows.forEach((row, rowIndex) => {
+		const trackId = targetTrackIdByRow.get(rowIndex);
+		if (!trackId) return;
+		for (const member of row.members) {
+			targetTrackIdsByElementId.set(member.elementId, trackId);
+		}
+	});
 	return targetTrackIdsByElementId;
 }
 

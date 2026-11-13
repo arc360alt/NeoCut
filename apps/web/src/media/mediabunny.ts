@@ -3,13 +3,15 @@ import {
 	ALL_FORMATS,
 	BlobSource,
 	VideoSampleSink,
+	type InputVideoTrack,
 	type VideoCodec,
 } from "mediabunny";
-import { createTimelineAudioBuffer } from "@/media/audio";
+import { createTimelineAudioBuffer } from "@/media/timeline-audio";
 import type { SceneTracks } from "@/timeline";
 import type { MediaAsset } from "@/media/types";
 import { TICKS_PER_SECOND } from "@/wasm";
 import { renderThumbnailDataUrl } from "./thumbnail";
+import { withDecodeFallback } from "./video-decoding";
 
 export type VideoFileData = {
 	duration: number;
@@ -19,8 +21,31 @@ export type VideoFileData = {
 	hasAudio: boolean;
 	codec: VideoCodec | null;
 	canDecode: boolean;
+	/** Why decoding a frame failed even though the codec is supported. */
+	decodeError: string | null;
 	thumbnailUrl: string | null;
 };
+
+async function renderVideoThumbnail({
+	videoTrack,
+}: {
+	videoTrack: InputVideoTrack;
+}): Promise<string | null> {
+	const sink = new VideoSampleSink(videoTrack);
+	const frame = await sink.getSample(1);
+	if (!frame) return null;
+	try {
+		return renderThumbnailDataUrl({
+			width: videoTrack.displayWidth,
+			height: videoTrack.displayHeight,
+			draw: ({ context, width, height }) => {
+				frame.draw(context, 0, 0, width, height);
+			},
+		});
+	} finally {
+		frame.close();
+	}
+}
 
 export async function readVideoFile({
 	file,
@@ -44,22 +69,18 @@ export async function readVideoFile({
 		const packetStats = await videoTrack.computePacketStats(100);
 		const audioTrack = await input.getPrimaryAudioTrack();
 
+		// A frame that fails to decode must not lose the file's metadata, or
+		// the clip is added with no duration or size.
 		let thumbnailUrl: string | null = null;
+		let decodeError: string | null = null;
 		if (canDecode) {
-			const sink = new VideoSampleSink(videoTrack);
-			const frame = await sink.getSample(1);
-			if (frame) {
-				try {
-					thumbnailUrl = renderThumbnailDataUrl({
-						width: videoTrack.displayWidth,
-						height: videoTrack.displayHeight,
-						draw: ({ context, width, height }) => {
-							frame.draw(context, 0, 0, width, height);
-						},
-					});
-				} finally {
-					frame.close();
-				}
+			try {
+				thumbnailUrl = await withDecodeFallback({
+					run: () => renderVideoThumbnail({ videoTrack }),
+				});
+			} catch (error) {
+				console.error("Couldn't decode a frame of", file.name, error);
+				decodeError = error instanceof Error ? error.message : String(error);
 			}
 		}
 
@@ -71,6 +92,7 @@ export async function readVideoFile({
 			hasAudio: audioTrack !== null,
 			codec: videoTrack.codec,
 			canDecode,
+			decodeError,
 			thumbnailUrl,
 		};
 	} finally {

@@ -20,6 +20,7 @@ import type {
 } from "@/preview/overlays";
 import { PreviewContextMenu } from "./context-menu";
 import { PreviewToolbar } from "./toolbar";
+import { flattenCompoundTracks } from "@/compound/flatten";
 import {
 	PreviewViewportProvider,
 	usePreviewViewportState,
@@ -98,6 +99,8 @@ function RenderTreeController() {
 	const tracks = useEditor(
 		(e) => e.timeline.getPreviewTracks() ?? e.scenes.getActiveScene().tracks,
 	);
+	// Compound clips play other scenes, so those scenes' edits matter too.
+	const scenes = useEditor((e) => e.scenes.getScenes());
 	const mediaAssets = useEditor((e) => e.media.getAssets());
 	const activeProject = useEditor((e) => e.project.getActive());
 
@@ -108,7 +111,7 @@ function RenderTreeController() {
 
 		const duration = editor.timeline.getTotalDuration();
 		const renderTree = buildScene({
-			tracks,
+			tracks: flattenCompoundTracks({ tracks, scenes }),
 			mediaAssets,
 			duration,
 			canvasSize: { width, height },
@@ -117,7 +120,7 @@ function RenderTreeController() {
 		});
 
 		editor.renderer.setRenderTree({ renderTree });
-	}, [tracks, mediaAssets, activeProject?.settings.background, width, height]);
+	}, [tracks, scenes, mediaAssets, activeProject?.settings.background, width, height]);
 
 	return null;
 }

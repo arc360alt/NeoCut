@@ -12,7 +12,24 @@ export interface TranscriptionResult {
 	text: string;
 	segments: TranscriptionSegment[];
 	language: string;
+	/** Nothing but sound tags ([Music], ♪…) was heard; they were hidden. */
+	onlySoundTags?: boolean;
 }
+
+export interface TranscriptionOptions {
+	/**
+	 * "hide": make the model write out sung words instead of tags like
+	 * [Music] or *Outro*, and drop any tags left. "keep": caption them.
+	 */
+	soundTags: "hide" | "keep";
+	/** Drop lines Whisper invents over music ("Thanks for watching!"). */
+	removeFiller: boolean;
+}
+
+export const DEFAULT_TRANSCRIPTION_OPTIONS: TranscriptionOptions = {
+	soundTags: "hide",
+	removeFiller: true,
+};
 
 export type TranscriptionStatus =
 	| "idle"

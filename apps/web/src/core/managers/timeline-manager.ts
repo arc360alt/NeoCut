@@ -738,10 +738,10 @@ export class TimelineManager {
 			});
 			if (changed) {
 				changedOverlayCount += 1;
-				const mergedOverlay = {
-					...existingOverlay,
-					...elementUpdates,
-				} as Partial<TimelineElement>;
+				const mergedOverlay = mergeElementUpdates({
+					base: existingOverlay ?? {},
+					updates: elementUpdates,
+				});
 				this.previewOverlay.set(elementId, mergedOverlay);
 			}
 		}
@@ -797,7 +797,7 @@ export class TimelineManager {
 			const nextElements = track.elements.map((element) => {
 				const overlay = this.previewOverlay.get(element.id);
 				return overlay
-					? ({ ...element, ...overlay } as TimelineElement)
+					? (mergeElementUpdates({ base: element, updates: overlay }) as TimelineElement)
 					: element;
 			});
 
@@ -947,4 +947,29 @@ export class TimelineManager {
 		this.editor.scenes.updateSceneTracks({ tracks: newTracks });
 		this.notify();
 	}
+}
+
+/**
+ * Applies a partial element update. `params` is merged a level deep, so an
+ * update naming one param (e.g. a text edit's `content`) keeps the rest,
+ * such as the element's position, instead of replacing them all.
+ */
+function mergeElementUpdates<T extends Partial<TimelineElement>>({
+	base,
+	updates,
+}: {
+	base: T;
+	updates: Partial<TimelineElement>;
+}): T {
+	const merged = { ...base, ...updates };
+	const baseParams: unknown = Reflect.get(base, "params");
+	const updateParams: unknown = Reflect.get(updates, "params");
+	if (isPlainObject(baseParams) && isPlainObject(updateParams)) {
+		Object.assign(merged, { params: { ...baseParams, ...updateParams } });
+	}
+	return merged;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }

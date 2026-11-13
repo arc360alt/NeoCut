@@ -15,6 +15,9 @@ import type { TimelineDragData } from "@/timeline/drag";
 import { cn } from "@/utils/ui";
 import type { MediaTime } from "@/wasm";
 
+/** 16 leading characters + "..." + the last 3. */
+const MAX_LABEL_LENGTH = 22;
+
 export interface DraggableItemProps {
 	name: string;
 	preview: ReactNode;
@@ -131,7 +134,8 @@ export function DraggableItem({
 							>
 								<span className="sr-only">{name}</span>
 								<span aria-hidden="true">
-									{name.length > 8
+									{/* Keep the start and the extension; only shorten when that drops something. */}
+									{name.length > MAX_LABEL_LENGTH
 										? `${name.slice(0, 16)}...${name.slice(-3)}`
 										: name}
 								</span>
@@ -221,6 +225,7 @@ function PlusButton({
 				onClick?.();
 			}}
 			title={tooltipText}
+			aria-label={tooltipText ?? "Add to timeline"}
 		>
 			<Plus />
 		</Button>

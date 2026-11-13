@@ -130,6 +130,10 @@ export const ACTIONS = {
 		description: "Mute/unmute selected elements",
 		category: "selection",
 	},
+	"create-compound-clip": {
+		description: "Create compound clip from selected elements",
+		category: "selection",
+	},
 	"toggle-elements-visibility-selected": {
 		description: "Show/hide selected elements",
 		category: "selection",
@@ -180,6 +184,7 @@ const ACTION_DEFAULT_SHORTCUTS = [
 	["select-all", ["ctrl+a"]],
 	["cancel-interaction", ["escape"]],
 	["duplicate-selected", ["ctrl+d"]],
+	["create-compound-clip", ["ctrl+g"]],
 	["undo", ["ctrl+z"]],
 	["redo", ["ctrl+shift+z", "ctrl+y"]],
 ] as const satisfies ReadonlyArray<

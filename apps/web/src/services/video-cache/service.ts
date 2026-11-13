@@ -6,17 +6,27 @@ import {
 	VideoSampleSink,
 	type VideoSample,
 } from "mediabunny";
+import { withDecodeFallback } from "@/media/video-decoding";
 
 /** Decoders unused for this long are closed to free their frames. */
 const IDLE_SINK_TTL_MS = 15_000;
-/** Frames handed out stay valid until this many later frames are drawn. */
-const OUTPUT_CANVAS_POOL_SIZE = 3;
+/** Frames handed out stay valid until this many later frames are produced. */
+const OUTPUT_POOL_SIZE = 3;
 /** Timestamps closer than this are treated as equal. */
 const TIMESTAMP_EPSILON = 1e-6;
 
 export interface DecodedVideoFrame {
-	/** Reused for later frames; `timestamp` tells its contents apart. */
-	canvas: OffscreenCanvas;
+	/**
+	 * The frame's pixels: the decoder's own `VideoFrame` when it can be used
+	 * as is (full-size decoding, i.e. export), otherwise a canvas it was
+	 * scaled into. Either is recycled a few frames later; `timestamp` tells
+	 * contents apart.
+	 */
+	source: OffscreenCanvas | VideoFrame;
+	width: number;
+	height: number;
+	/** The video has an alpha channel (e.g. a transparent GIF converted to WebM). */
+	hasAlpha: boolean;
 	timestamp: number;
 	duration: number;
 }
@@ -32,7 +42,7 @@ const MAX_FORWARD_GAP_SECONDS = 10;
  */
 const SAME_CONSUMER_SECONDS = 0.25;
 
-/** One decoder position in a video, with its own output canvases. */
+/** One decoder position in a video, with its own output slots. */
 interface VideoStream {
 	iterator: AsyncGenerator<VideoSample, void, unknown> | null;
 	/** Decoded but not yet consumed; at most one is held. */
@@ -40,8 +50,13 @@ interface VideoStream {
 	/** Timestamp of the last sample pulled from the iterator. */
 	position: number;
 	current: DecodedVideoFrame | null;
-	canvases: OffscreenCanvas[];
-	nextCanvasIndex: number;
+	/** Output slots, reused in turn; each holds a canvas or a kept frame. */
+	slots: OutputSlot[];
+	nextSlotIndex: number;
+	width: number;
+	height: number;
+	/** Decoded frames are handed out directly instead of drawn to a canvas. */
+	keepsFrames: boolean;
 	lastUsedAt: number;
 	/** Requests to one stream run in order. */
 	chain: Promise<unknown>;
@@ -49,6 +64,11 @@ interface VideoStream {
 	/** Time of the newest queued request, or null when idle. */
 	latestRequest: number | null;
 	inFlight: number;
+}
+
+interface OutputSlot {
+	canvas: OffscreenCanvas | null;
+	frame: VideoFrame | null;
 }
 
 interface VideoSinkData {
@@ -176,6 +196,10 @@ export class VideoCache {
 			const stream = createStream({
 				width: sinkData.outputWidth,
 				height: sinkData.outputHeight,
+				// Full-size frames need no scaling, so the decoder's frame is
+				// the output: no copy into a canvas, and an encoder can take it
+				// without converting it to RGB and back.
+				keepsFrames: sinkData.maxSize === null,
 			});
 			sinkData.streams.push(stream);
 			return stream;
@@ -201,15 +225,21 @@ export class VideoCache {
 		}
 
 		try {
-			if (await this.canContinueTo({ sinkData, stream, time })) {
-				const frame = await this.decodeForwardTo({ stream, time });
-				if (frame) {
-					return frame;
-				}
-			}
+			return await withDecodeFallback({
+				run: async () => {
+					if (await this.canContinueTo({ sinkData, stream, time })) {
+						const frame = await this.decodeForwardTo({ stream, time });
+						if (frame) {
+							return frame;
+						}
+					}
 
-			await this.restartAt({ sinkData, stream, time });
-			return (await this.decodeForwardTo({ stream, time })) ?? stream.current;
+					await this.restartAt({ sinkData, stream, time });
+					return (await this.decodeForwardTo({ stream, time })) ?? stream.current;
+				},
+				// The failed decoder is discarded; the retry starts a new one.
+				beforeRetry: () => resetStream({ stream }),
+			});
 		} catch (error) {
 			console.warn("Failed to decode video frame:", error);
 			await resetStream({ stream });
@@ -415,7 +445,7 @@ export class VideoCache {
 				// Within a live video, drop streams no longer being played.
 				sinkData.streams = sinkData.streams.filter((stream) => {
 					const isIdle = now - stream.lastUsedAt >= IDLE_SINK_TTL_MS;
-					if (isIdle) void resetStream({ stream });
+					if (isIdle) void releaseStream({ stream });
 					return !isIdle;
 				});
 			}
@@ -429,7 +459,7 @@ export class VideoCache {
 		const sinkData = this.sinks.get(sinkKey);
 		if (sinkData) {
 			for (const stream of sinkData.streams) {
-				void resetStream({ stream });
+				void releaseStream({ stream });
 			}
 			sinkData.streams = [];
 			sinkData.input.dispose();
@@ -470,20 +500,25 @@ export class VideoCache {
 function createStream({
 	width,
 	height,
+	keepsFrames,
 }: {
 	width: number;
 	height: number;
+	keepsFrames: boolean;
 }): VideoStream {
 	return {
 		iterator: null,
 		pending: null,
 		position: Number.NEGATIVE_INFINITY,
 		current: null,
-		canvases: Array.from(
-			{ length: OUTPUT_CANVAS_POOL_SIZE },
-			() => new OffscreenCanvas(width, height),
-		),
-		nextCanvasIndex: 0,
+		slots: Array.from({ length: OUTPUT_POOL_SIZE }, () => ({
+			canvas: null,
+			frame: null,
+		})),
+		nextSlotIndex: 0,
+		width,
+		height,
+		keepsFrames,
 		lastUsedAt: performance.now(),
 		chain: Promise.resolve(),
 		generation: 0,
@@ -501,6 +536,17 @@ async function resetStream({ stream }: { stream: VideoStream }): Promise<void> {
 	await iterator?.return();
 }
 
+/** Resets the stream and frees the frames it still holds. */
+async function releaseStream({ stream }: { stream: VideoStream }): Promise<void> {
+	await resetStream({ stream });
+	stream.current = null;
+	for (const slot of stream.slots) {
+		slot.frame?.close();
+		slot.frame = null;
+		slot.canvas = null;
+	}
+}
+
 function drawSample({
 	stream,
 	sample,
@@ -508,17 +554,37 @@ function drawSample({
 	stream: VideoStream;
 	sample: VideoSample;
 }): DecodedVideoFrame {
-	const canvas = stream.canvases[stream.nextCanvasIndex];
-	stream.nextCanvasIndex = (stream.nextCanvasIndex + 1) % stream.canvases.length;
-	const ctx = canvas.getContext("2d");
-	if (!ctx) {
-		throw new Error("Failed to get 2d context for video frame");
+	const slot = stream.slots[stream.nextSlotIndex];
+	stream.nextSlotIndex = (stream.nextSlotIndex + 1) % stream.slots.length;
+	slot.frame?.close();
+	slot.frame = null;
+
+	let source: OffscreenCanvas | VideoFrame;
+	if (
+		stream.keepsFrames &&
+		sample.rotation === 0 &&
+		sample.displayWidth === stream.width &&
+		sample.displayHeight === stream.height
+	) {
+		// A new reference to the same pixels; nothing is copied.
+		slot.frame = sample.toVideoFrame();
+		source = slot.frame;
+	} else {
+		slot.canvas ??= new OffscreenCanvas(stream.width, stream.height);
+		const ctx = slot.canvas.getContext("2d");
+		if (!ctx) {
+			throw new Error("Failed to get 2d context for video frame");
+		}
+		ctx.clearRect(0, 0, slot.canvas.width, slot.canvas.height);
+		sample.drawWithFit(ctx, { fit: "contain" });
+		source = slot.canvas;
 	}
-	ctx.clearRect(0, 0, canvas.width, canvas.height);
-	sample.drawWithFit(ctx, { fit: "contain" });
 
 	const frame: DecodedVideoFrame = {
-		canvas,
+		source,
+		width: stream.width,
+		height: stream.height,
+		hasAlpha: sample.hasAlpha === true,
 		timestamp: sample.timestamp,
 		duration: sample.duration,
 	};

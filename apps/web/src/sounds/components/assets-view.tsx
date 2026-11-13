@@ -25,6 +25,8 @@ import { useInfiniteScroll } from "@/hooks/use-infinite-scroll";
 import { useSoundSearch } from "@/sounds/use-sound-search";
 import { useSoundsStore } from "@/sounds/sounds-store";
 import type { SavedSound, SoundEffect } from "@/sounds/types";
+import type { ImportProgress } from "@/media/download";
+import { ImportProgressIndicator } from "@/media/components/import-progress";
 import { cn } from "@/utils/ui";
 import {
 	FavouriteIcon,
@@ -496,11 +498,21 @@ function AudioItem({ sound, isPlaying, onPlay }: AudioItemProps) {
 		toggleSavedSound({ soundEffect: sound });
 	};
 
+	const [importProgress, setImportProgress] = useState<ImportProgress | null>(
+		null,
+	);
+
 	const handleAddToTimeline = async (
 		event: React.MouseEvent<HTMLButtonElement>,
 	) => {
 		event.stopPropagation();
-		await addSoundToTimeline({ sound });
+		if (importProgress) return;
+		setImportProgress({ stage: "downloading", fraction: null });
+		try {
+			await addSoundToTimeline({ sound, onProgress: setImportProgress });
+		} finally {
+			setImportProgress(null);
+		}
 	};
 
 	return (
@@ -521,9 +533,16 @@ function AudioItem({ sound, isPlaying, onPlay }: AudioItemProps) {
 
 				<div className="min-w-0 flex-1 overflow-hidden">
 					<p className="truncate text-sm font-medium">{sound.name}</p>
-					<span className="text-muted-foreground block truncate text-xs">
-						{sound.username}
-					</span>
+					{importProgress ? (
+						<ImportProgressIndicator
+							progress={importProgress}
+							className="text-muted-foreground mt-0.5"
+						/>
+					) : (
+						<span className="text-muted-foreground block truncate text-xs">
+							{sound.username}
+						</span>
+					)}
 				</div>
 			</button>
 
@@ -533,6 +552,7 @@ function AudioItem({ sound, isPlaying, onPlay }: AudioItemProps) {
 					size="icon"
 					className="text-muted-foreground hover:text-foreground w-auto !opacity-100"
 					onClick={handleAddToTimeline}
+					disabled={importProgress !== null}
 					title="Add to timeline"
 				>
 					<HugeiconsIcon icon={PlusSignIcon} />

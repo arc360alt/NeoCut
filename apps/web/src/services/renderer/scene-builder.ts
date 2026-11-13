@@ -121,6 +121,7 @@ function buildTrackNodes({
 							file: mediaAsset.file,
 							duration: element.duration,
 							timeOffset: element.startTime,
+							compoundParents: element.compoundParents,
 							trimStart: element.trimStart,
 							trimEnd: element.trimEnd,
 							retime: element.retime,
@@ -139,8 +140,12 @@ function buildTrackNodes({
 					nodes.push(
 						new ImageNode({
 							url: mediaAsset.url,
+							isVector:
+								mediaAsset.file?.type === "image/svg+xml" ||
+								/\.svg$/i.test(mediaAsset.name),
 							duration: element.duration,
 							timeOffset: element.startTime,
+							compoundParents: element.compoundParents,
 							trimStart: element.trimStart,
 							trimEnd: element.trimEnd,
 							transform: buildTransformFromParams({ params: element.params }),
@@ -182,6 +187,7 @@ function buildTrackNodes({
 						intrinsicHeight: element.intrinsicHeight,
 						duration: element.duration,
 						timeOffset: element.startTime,
+						compoundParents: element.compoundParents,
 						trimStart: element.trimStart,
 						trimEnd: element.trimEnd,
 						transform: buildTransformFromParams({ params: element.params }),
@@ -201,6 +207,7 @@ function buildTrackNodes({
 						params: element.params,
 						duration: element.duration,
 						timeOffset: element.startTime,
+						compoundParents: element.compoundParents,
 						trimStart: element.trimStart,
 						trimEnd: element.trimEnd,
 						transform: buildTransformFromParams({ params: element.params }),

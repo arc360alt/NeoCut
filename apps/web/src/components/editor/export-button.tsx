@@ -24,7 +24,7 @@ import { cn } from "@/utils/ui";
 import {
 	getExportMimeType,
 	getExportFileExtension,
-	downloadBuffer,
+	downloadBlob,
 } from "@/export";
 import { Check, Copy, Download, RotateCcw } from "lucide-react";
 import {
@@ -73,9 +73,9 @@ export function ExportButton() {
 				editor.project.clearExportState();
 				return;
 			}
-			if (result.success && result.buffer) {
-				downloadBuffer({
-					buffer: result.buffer,
+			if (result.success && result.file) {
+				downloadBlob({
+					blob: result.file,
 					filename: `${project.metadata.name}${getExportFileExtension({ format: options.format })}`,
 					mimeType: getExportMimeType({ format: options.format }),
 				});
@@ -134,12 +134,53 @@ export function ExportButton() {
  * pressing Escape — only Cancel stops the export — so a stray click can't
  * throw away a long render.
  */
+function formatDuration(totalSeconds: number): string {
+	const seconds = Math.max(0, Math.round(totalSeconds));
+	const hours = Math.floor(seconds / 3600);
+	const minutes = Math.floor((seconds % 3600) / 60);
+	const rest = String(seconds % 60).padStart(2, "0");
+	return hours > 0
+		? `${hours}:${String(minutes).padStart(2, "0")}:${rest}`
+		: `${minutes}:${rest}`;
+}
+
+/** Elapsed time while exporting, ticking once a second. */
+function useExportElapsedSeconds({ isExporting }: { isExporting: boolean }): number {
+	const [timing, setTiming] = useState<{ start: number | null; now: number }>({
+		start: null,
+		now: 0,
+	});
+	useEffect(() => {
+		if (!isExporting) return;
+		const id = setInterval(() => {
+			const now = Date.now();
+			setTiming((previous) => ({ start: previous.start ?? now, now }));
+		}, 1000);
+		return () => {
+			clearInterval(id);
+			setTiming({ start: null, now: 0 });
+		};
+	}, [isExporting]);
+	return timing.start === null ? 0 : (timing.now - timing.start) / 1000;
+}
+
+/** Below this much progress (or time) an estimate is mostly noise. */
+const MIN_PROGRESS_FOR_ESTIMATE = 0.01;
+const MIN_SECONDS_FOR_ESTIMATE = 5;
+
 function ExportProgressDialog({ onRetry }: { onRetry: () => void }) {
 	const editor = useEditor();
 	const exportState = useEditor((e) => e.project.getExportState());
 	const { isExporting, progress, result } = exportState;
 	const hasFailed = !isExporting && !!result && !result.success;
 	const isOpen = isExporting || hasFailed;
+	const elapsedSeconds = useExportElapsedSeconds({ isExporting });
+	const remainingSeconds =
+		progress >= MIN_PROGRESS_FOR_ESTIMATE &&
+		progress < 1 &&
+		elapsedSeconds >= MIN_SECONDS_FOR_ESTIMATE
+			? (elapsedSeconds * (1 - progress)) / progress
+			: null;
 
 	// Leaving or reloading the page would also lose the export.
 	useEffect(() => {
@@ -192,6 +233,11 @@ function ExportProgressDialog({ onRetry }: { onRetry: () => void }) {
 									</p>
 								</div>
 								<Progress value={progress * 100} className="w-full" />
+								<p className="text-muted-foreground text-xs tabular-nums">
+									Elapsed {formatDuration(elapsedSeconds)}
+									{remainingSeconds !== null &&
+										` · about ${formatDuration(remainingSeconds)} left`}
+								</p>
 							</div>
 							<Button
 								variant="outline"
@@ -224,6 +270,7 @@ function ExportPopover({
 	const [shouldIncludeAudio, setShouldIncludeAudio] = useState<boolean>(
 		DEFAULT_EXPORT_OPTIONS.includeAudio ?? true,
 	);
+	const [isTransparent, setIsTransparent] = useState(false);
 
 	const handleExport = () => {
 		if (!activeProject) return;
@@ -233,6 +280,7 @@ function ExportPopover({
 				quality,
 				fps: activeProject.settings.fps,
 				includeAudio: shouldIncludeAudio,
+				transparentBackground: isTransparent && format === "webm",
 			},
 		});
 	};
@@ -263,6 +311,8 @@ function ExportPopover({
 										onValueChange={(value) => {
 											if (isExportFormat(value)) {
 												setFormat(value);
+												// Only WebM carries transparency.
+												if (value !== "webm") setIsTransparent(false);
 											}
 										}}
 									>
@@ -275,10 +325,29 @@ function ExportPopover({
 										<div className="flex items-center space-x-2">
 											<RadioGroupItem value="webm" id="webm" />
 											<Label htmlFor="webm">
-												WebM (VP9) - Smaller file size
+												WebM (VP9) - Slower to export
 											</Label>
 										</div>
 									</RadioGroup>
+									<div className="mt-3 flex items-start space-x-2">
+										<Checkbox
+											id="transparent-background"
+											checked={isTransparent}
+											onCheckedChange={(checked) => {
+												setIsTransparent(!!checked);
+												if (checked) setFormat("webm");
+											}}
+										/>
+										<div className="grid gap-1">
+											<Label htmlFor="transparent-background">
+												Transparent background
+											</Label>
+											<span className="text-muted-foreground text-xs">
+												For logos and overlays. Exports WebM with an alpha
+												channel; the project background is left out.
+											</span>
+										</div>
+									</div>
 								</SectionContent>
 							</Section>
 

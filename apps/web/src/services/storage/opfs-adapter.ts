@@ -1,3 +1,4 @@
+import { INSECURE_CONTEXT_MESSAGE } from "@/utils/secure-context";
 import type { StorageAdapter } from "./types";
 
 export class OPFSAdapter implements StorageAdapter<File> {
@@ -8,6 +9,13 @@ export class OPFSAdapter implements StorageAdapter<File> {
 	}
 
 	private async getDirectory(): Promise<FileSystemDirectoryHandle> {
+		if (typeof navigator === "undefined" || !navigator.storage?.getDirectory) {
+			throw new Error(
+				window.isSecureContext
+					? "This browser doesn't support file storage (OPFS)."
+					: INSECURE_CONTEXT_MESSAGE,
+			);
+		}
 		const opfsRoot = await navigator.storage.getDirectory();
 		return await opfsRoot.getDirectoryHandle(this.directoryName, {
 			create: true,

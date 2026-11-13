@@ -70,7 +70,7 @@ export async function buildFrameDescriptor({
 			width: renderer.width,
 			height: renderer.height,
 			clear: {
-				color: [0, 0, 0, 1],
+				color: renderer.clearColor,
 			},
 			items,
 		},
@@ -395,6 +395,9 @@ async function collectVisualSourceNode({
 			width: sourceWidth,
 			height: sourceHeight,
 			version: sourceVersion,
+			opaque:
+				node instanceof VideoNode &&
+				(node.resolved as ResolvedVisualSourceNodeState).sourceOpaque !== false,
 		});
 	}
 

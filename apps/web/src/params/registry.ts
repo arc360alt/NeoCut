@@ -352,6 +352,12 @@ elementParamRegistry.register({
 });
 elementParamRegistry.register({ key: "audio", definition: audioElementParams });
 elementParamRegistry.register({ key: "effect", definition: [] });
+// Applied on top of each clip inside. Blend mode is left out: blending each
+// inner clip separately isn't the same as blending the group.
+elementParamRegistry.register({
+	key: "compound",
+	definition: visualElementParams.filter((param) => param.key !== "blendMode"),
+});
 
 export function getElementParams({
 	element,

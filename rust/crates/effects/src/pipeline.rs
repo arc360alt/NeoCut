@@ -7,8 +7,79 @@ use wgpu::util::DeviceExt;
 
 use crate::{EffectPass, UniformValue};
 
-const GAUSSIAN_BLUR_SHADER_ID: &str = "gaussian-blur";
-const GAUSSIAN_BLUR_SHADER_SOURCE: &str = include_str!("shaders/gaussian_blur.wgsl");
+/// Where a named uniform goes in [`EffectUniformBuffer`].
+#[derive(Clone, Copy)]
+enum UniformSlot {
+    /// `direction`, a 2-component vector.
+    Direction,
+    /// One component of `scalars`.
+    Scalar(usize),
+}
+
+/// An effect shader and the uniforms it takes. Every listed uniform is
+/// required; any other uniform is rejected.
+struct ShaderSpec {
+    id: &'static str,
+    source: &'static str,
+    uniforms: &'static [(&'static str, UniformSlot)],
+}
+
+const SHADERS: &[ShaderSpec] = &[
+    ShaderSpec {
+        id: "gaussian-blur",
+        source: include_str!("shaders/gaussian_blur.wgsl"),
+        uniforms: &[
+            ("u_sigma", UniformSlot::Scalar(0)),
+            ("u_step", UniformSlot::Scalar(1)),
+            ("u_direction", UniformSlot::Direction),
+        ],
+    },
+    ShaderSpec {
+        id: "vignette",
+        source: include_str!("shaders/vignette.wgsl"),
+        uniforms: &[
+            ("u_amount", UniformSlot::Scalar(0)),
+            ("u_size", UniformSlot::Scalar(1)),
+            ("u_softness", UniformSlot::Scalar(2)),
+        ],
+    },
+    ShaderSpec {
+        id: "pixelate",
+        source: include_str!("shaders/pixelate.wgsl"),
+        uniforms: &[("u_block_size", UniformSlot::Scalar(0))],
+    },
+    ShaderSpec {
+        id: "rgb-split",
+        source: include_str!("shaders/rgb_split.wgsl"),
+        uniforms: &[
+            ("u_distance", UniformSlot::Scalar(0)),
+            ("u_direction", UniformSlot::Direction),
+        ],
+    },
+    ShaderSpec {
+        id: "sharpen",
+        source: include_str!("shaders/sharpen.wgsl"),
+        uniforms: &[("u_amount", UniformSlot::Scalar(0))],
+    },
+    ShaderSpec {
+        id: "posterize",
+        source: include_str!("shaders/posterize.wgsl"),
+        uniforms: &[("u_levels", UniformSlot::Scalar(0))],
+    },
+    ShaderSpec {
+        id: "wave",
+        source: include_str!("shaders/wave.wgsl"),
+        uniforms: &[
+            ("u_amplitude", UniformSlot::Scalar(0)),
+            ("u_frequency", UniformSlot::Scalar(1)),
+            ("u_phase", UniformSlot::Scalar(2)),
+        ],
+    },
+];
+
+fn shader_spec(shader: &str) -> Option<&'static ShaderSpec> {
+    SHADERS.iter().find(|spec| spec.id == shader)
+}
 
 pub struct ApplyEffectsOptions<'a> {
     pub source: &'a wgpu::Texture,
@@ -77,13 +148,6 @@ impl EffectPipeline {
                     label: Some("effects-fullscreen-shader"),
                     source: wgpu::ShaderSource::Wgsl(FULLSCREEN_SHADER_SOURCE.into()),
                 });
-        let gaussian_blur_shader_module =
-            context
-                .device()
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("effects-gaussian-blur-shader"),
-                    source: wgpu::ShaderSource::Wgsl(GAUSSIAN_BLUR_SHADER_SOURCE.into()),
-                });
         let pipeline_layout =
             context
                 .device()
@@ -95,44 +159,55 @@ impl EffectPipeline {
                     ],
                     immediate_size: 0,
                 });
-        let gaussian_blur_pipeline =
-            context
-                .device()
-                .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    label: Some("effects-gaussian-blur-pipeline"),
-                    layout: Some(&pipeline_layout),
-                    vertex: wgpu::VertexState {
-                        module: &vertex_shader_module,
-                        entry_point: Some("vertex_main"),
-                        buffers: &[wgpu::VertexBufferLayout {
-                            array_stride: std::mem::size_of::<[f32; 2]>() as u64,
-                            step_mode: wgpu::VertexStepMode::Vertex,
-                            attributes: &[wgpu::VertexAttribute {
-                                format: wgpu::VertexFormat::Float32x2,
-                                offset: 0,
-                                shader_location: 0,
-                            }],
-                        }],
-                        compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    },
-                    fragment: Some(wgpu::FragmentState {
-                        module: &gaussian_blur_shader_module,
-                        entry_point: Some("fragment_main"),
-                        targets: &[Some(wgpu::ColorTargetState {
-                            format: context.texture_format(),
-                            blend: None,
-                            write_mask: wgpu::ColorWrites::ALL,
-                        })],
-                        compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    }),
-                    primitive: wgpu::PrimitiveState::default(),
-                    depth_stencil: None,
-                    multisample: wgpu::MultisampleState::default(),
-                    multiview_mask: None,
-                    cache: None,
-                });
-        let pipelines =
-            HashMap::from([(GAUSSIAN_BLUR_SHADER_ID.to_string(), gaussian_blur_pipeline)]);
+        let pipelines = SHADERS
+            .iter()
+            .map(|spec| {
+                let fragment_module =
+                    context
+                        .device()
+                        .create_shader_module(wgpu::ShaderModuleDescriptor {
+                            label: Some(spec.id),
+                            source: wgpu::ShaderSource::Wgsl(spec.source.into()),
+                        });
+                let pipeline =
+                    context
+                        .device()
+                        .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                            label: Some(spec.id),
+                            layout: Some(&pipeline_layout),
+                            vertex: wgpu::VertexState {
+                                module: &vertex_shader_module,
+                                entry_point: Some("vertex_main"),
+                                buffers: &[wgpu::VertexBufferLayout {
+                                    array_stride: std::mem::size_of::<[f32; 2]>() as u64,
+                                    step_mode: wgpu::VertexStepMode::Vertex,
+                                    attributes: &[wgpu::VertexAttribute {
+                                        format: wgpu::VertexFormat::Float32x2,
+                                        offset: 0,
+                                        shader_location: 0,
+                                    }],
+                                }],
+                                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                            },
+                            fragment: Some(wgpu::FragmentState {
+                                module: &fragment_module,
+                                entry_point: Some("fragment_main"),
+                                targets: &[Some(wgpu::ColorTargetState {
+                                    format: context.texture_format(),
+                                    blend: None,
+                                    write_mask: wgpu::ColorWrites::ALL,
+                                })],
+                                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                            }),
+                            primitive: wgpu::PrimitiveState::default(),
+                            depth_stencil: None,
+                            multisample: wgpu::MultisampleState::default(),
+                            multiview_mask: None,
+                            cache: None,
+                        });
+                (spec.id.to_string(), pipeline)
+            })
+            .collect::<HashMap<_, _>>();
 
         Self {
             uniform_bind_group_layout,
@@ -267,26 +342,31 @@ fn pack_effect_uniforms(
     width: u32,
     height: u32,
 ) -> Result<EffectUniformBuffer, EffectsError> {
-    let shader = pass.shader.as_str();
-    let sigma = read_number_uniform(pass, "u_sigma")?;
-    let step = read_number_uniform(pass, "u_step")?;
-    let direction = read_vec2_uniform(pass, "u_direction")?;
+    let spec = shader_spec(&pass.shader).ok_or_else(|| EffectsError::UnknownEffectShader {
+        shader: pass.shader.clone(),
+    })?;
 
     for uniform in pass.uniforms.keys() {
-        if uniform == "u_sigma" || uniform == "u_step" || uniform == "u_direction" {
-            continue;
+        if !spec.uniforms.iter().any(|(name, _)| name == uniform) {
+            return Err(EffectsError::UnsupportedUniform {
+                shader: pass.shader.clone(),
+                uniform: uniform.clone(),
+            });
         }
-        return Err(EffectsError::UnsupportedUniform {
-            shader: shader.to_string(),
-            uniform: uniform.clone(),
-        });
     }
 
-    Ok(EffectUniformBuffer {
+    let mut buffer = EffectUniformBuffer {
         resolution: [width as f32, height as f32],
-        direction,
-        scalars: [sigma, step, 0.0, 0.0],
-    })
+        direction: [0.0, 0.0],
+        scalars: [0.0; 4],
+    };
+    for (name, slot) in spec.uniforms {
+        match slot {
+            UniformSlot::Direction => buffer.direction = read_vec2_uniform(pass, name)?,
+            UniformSlot::Scalar(index) => buffer.scalars[*index] = read_number_uniform(pass, name)?,
+        }
+    }
+    Ok(buffer)
 }
 
 fn read_number_uniform(pass: &EffectPass, uniform: &str) -> Result<f32, EffectsError> {
@@ -327,4 +407,110 @@ fn read_vec2_uniform(pass: &EffectPass, uniform: &str) -> Result<[f32; 2], Effec
         });
     }
     Ok([values[0], values[1]])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pass(shader: &str, uniforms: &[(&str, UniformValue)]) -> EffectPass {
+        EffectPass {
+            shader: shader.to_string(),
+            uniforms: uniforms
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.clone()))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn every_shader_is_valid_wgsl() {
+        use wgpu::naga;
+        for spec in SHADERS {
+            let module = naga::front::wgsl::parse_str(spec.source)
+                .unwrap_or_else(|error| panic!("{}: {}", spec.id, error.emit_to_string(spec.source)));
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::empty(),
+            )
+            .validate(&module)
+            .unwrap_or_else(|error| panic!("{}: {error:?}", spec.id));
+            assert!(
+                module.entry_points.iter().any(|entry| entry.name == "fragment_main"),
+                "{} has no fragment_main",
+                spec.id
+            );
+        }
+    }
+
+    #[test]
+    fn shader_ids_are_unique() {
+        for (index, spec) in SHADERS.iter().enumerate() {
+            assert!(
+                SHADERS[index + 1..].iter().all(|other| other.id != spec.id),
+                "duplicate shader id {}",
+                spec.id
+            );
+        }
+    }
+
+    #[test]
+    fn blur_uniforms_keep_their_layout() {
+        let buffer = pack_effect_uniforms(
+            &pass(
+                "gaussian-blur",
+                &[
+                    ("u_sigma", UniformValue::Number(3.0)),
+                    ("u_step", UniformValue::Number(2.0)),
+                    ("u_direction", UniformValue::Vector(vec![1.0, 0.0])),
+                ],
+            ),
+            1920,
+            1080,
+        )
+        .unwrap();
+        assert_eq!(buffer.resolution, [1920.0, 1080.0]);
+        assert_eq!(buffer.direction, [1.0, 0.0]);
+        assert_eq!(buffer.scalars, [3.0, 2.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn packs_named_uniforms_into_their_slots() {
+        let buffer = pack_effect_uniforms(
+            &pass(
+                "wave",
+                &[
+                    ("u_amplitude", UniformValue::Number(12.0)),
+                    ("u_frequency", UniformValue::Number(4.0)),
+                    ("u_phase", UniformValue::Number(0.25)),
+                ],
+            ),
+            100,
+            100,
+        )
+        .unwrap();
+        assert_eq!(buffer.scalars, [12.0, 4.0, 0.25, 0.0]);
+    }
+
+    #[test]
+    fn rejects_unknown_and_missing_uniforms() {
+        let unknown = pack_effect_uniforms(
+            &pass(
+                "posterize",
+                &[
+                    ("u_levels", UniformValue::Number(4.0)),
+                    ("u_sigma", UniformValue::Number(1.0)),
+                ],
+            ),
+            1,
+            1,
+        );
+        assert!(matches!(unknown, Err(EffectsError::UnsupportedUniform { .. })));
+
+        let missing = pack_effect_uniforms(&pass("posterize", &[]), 1, 1);
+        assert!(matches!(missing, Err(EffectsError::MissingUniform { .. })));
+
+        let unknown_shader = pack_effect_uniforms(&pass("nope", &[]), 1, 1);
+        assert!(matches!(unknown_shader, Err(EffectsError::UnknownEffectShader { .. })));
+    }
 }

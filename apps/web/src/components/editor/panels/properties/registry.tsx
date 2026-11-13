@@ -17,6 +17,7 @@ import type { MediaAsset } from "@/media/types";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
 	TextFontIcon,
+	Layers01Icon,
 	ArrowExpandIcon,
 	RainDropIcon,
 	MusicNote03Icon,
@@ -33,6 +34,7 @@ import { GraphicTab } from "@/graphics/components/graphic-tab";
 import { TransitionTab } from "@/transitions/components/transition-tab";
 import { AdjustmentControls } from "@/adjustments/components/adjustment-controls";
 import { OcShapesIcon } from "@/components/icons";
+import { CompoundTab } from "@/compound/components/compound-tab";
 
 const TRANSFORM_PARAM_KEYS = [
 	"transform.positionX",
@@ -397,5 +399,21 @@ export function getPropertiesConfig({
 			return getAudioConfig({ element });
 		case "effect":
 			return getEffectConfig({ element });
+		case "compound":
+			// Edited like any clip; the changes apply to everything inside.
+			return {
+				defaultTab: "transform",
+				tabs: [
+					buildTransformTab({ element }),
+					buildBlendingTab({ element }),
+					buildClipEffectsTab({ element }),
+					{
+						id: "compound",
+						label: "Compound clip",
+						icon: <HugeiconsIcon icon={Layers01Icon} size={16} />,
+						content: () => <CompoundTab element={element} />,
+					},
+				],
+			};
 	}
 }

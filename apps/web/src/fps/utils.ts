@@ -18,6 +18,27 @@ const STANDARD_FRAME_RATES: Array<{ value: number; rate: FrameRate }> = [
 
 const STANDARD_FRAME_RATE_TOLERANCE = 0.01;
 
+/** Rates a project snaps to when it takes its rate from imported media. */
+const PROJECT_FRAME_RATES = [24, 25, 30, 50, 60, 120];
+
+/**
+ * The project rate for media measured at `fps`. Screen and phone recordings
+ * often have a variable rate whose average is something like 34.6; exporting
+ * at 35 fps makes files that phone apps and upload sites fail to process
+ * ("Failed to resize video"), so anything that isn't already a standard rate
+ * snaps to the nearest common one.
+ */
+export function projectFrameRateForMedia(fps: number): FrameRate {
+	const standard = STANDARD_FRAME_RATES.find(
+		(candidate) => Math.abs(fps - candidate.value) <= STANDARD_FRAME_RATE_TOLERANCE,
+	);
+	if (standard) return standard.rate;
+	const nearest = PROJECT_FRAME_RATES.reduce((best, candidate) =>
+		Math.abs(candidate - fps) < Math.abs(best - fps) ? candidate : best,
+	);
+	return { numerator: nearest, denominator: 1 };
+}
+
 export function frameRateToFloat(rate: FrameRate): number {
 	return rate.numerator / rate.denominator;
 }
@@ -94,11 +115,12 @@ export function getRaisedProjectFpsForImportedMedia({
 		mediaAssets: importedAssets,
 	});
 
-	const currentFpsFloat = frameRateToFloat(currentFps);
-
-	if (highestImportedVideoFps === null || highestImportedVideoFps <= currentFpsFloat) {
+	if (highestImportedVideoFps === null) {
 		return null;
 	}
-
-	return floatToFrameRate(highestImportedVideoFps);
+	const nextFps = projectFrameRateForMedia(highestImportedVideoFps);
+	if (frameRateToFloat(nextFps) <= frameRateToFloat(currentFps)) {
+		return null;
+	}
+	return nextFps;
 }

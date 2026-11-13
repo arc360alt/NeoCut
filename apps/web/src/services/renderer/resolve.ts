@@ -31,6 +31,13 @@ import {
 } from "@/text/measure-element";
 import { resolveColorAtTime, resolveOpacityAtTime } from "@/animation/values";
 import { resolveTransformAtTime } from "@/rendering/animation-values";
+import { composeTransforms } from "@/compound/compose";
+import type { CompoundElement } from "@/timeline";
+import {
+	buildTransformFromParams,
+	readOpacityFromParams,
+	type Transform,
+} from "@/rendering";
 import { videoCache } from "@/services/video-cache/service";
 import type { CanvasRenderer } from "./canvas-renderer";
 import type { AnyBaseNode } from "./nodes/base-node";
@@ -48,6 +55,13 @@ import {
 	type ResolvedGraphicNodeState,
 } from "./nodes/graphic-node";
 import { ImageNode, loadImageSource } from "./nodes/image-node";
+import {
+	displayedLongSide,
+	intrinsicVectorSize,
+	isVectorUrl,
+	rasterizeVector,
+	vectorRasterSize,
+} from "./vector-raster";
 import { StickerNode, loadStickerSource } from "./nodes/sticker-node";
 import { TextNode, type ResolvedTextNodeState } from "./nodes/text-node";
 import {
@@ -121,6 +135,64 @@ async function resolveNode({
 	await Promise.all(
 		node.children.map((child) => resolveNode({ node: child, context })),
 	);
+}
+
+/**
+ * Applies the compound clips an element sits inside (outermost first): their
+ * transform and opacity at their own keyframe time, then their effects.
+ */
+function applyCompoundParents({
+	parents,
+	time,
+	transform,
+	opacity,
+	canvasWidth,
+	canvasHeight,
+}: {
+	parents: readonly CompoundElement[] | undefined;
+	time: number;
+	transform: Transform;
+	opacity: number;
+	canvasWidth: number;
+	canvasHeight: number;
+}): { transform: Transform; opacity: number; effectPasses: EffectPass[][] } {
+	if (!parents || parents.length === 0) {
+		return { transform, opacity, effectPasses: [] };
+	}
+	let composed = transform;
+	let composedOpacity = opacity;
+	const effectPasses: EffectPass[][] = [];
+	// Innermost first: each parent wraps everything inside it.
+	for (const parent of [...parents].reverse()) {
+		const localTime = getElementLocalTime({
+			timelineTime: time,
+			elementStartTime: parent.startTime,
+			elementDuration: parent.duration,
+		});
+		composed = composeTransforms({
+			parent: resolveTransformAtTime({
+				baseTransform: buildTransformFromParams({ params: parent.params }),
+				animations: parent.animations,
+				localTime,
+			}),
+			child: composed,
+		});
+		composedOpacity *= resolveOpacityAtTime({
+			baseOpacity: readOpacityFromParams({ params: parent.params }),
+			animations: parent.animations,
+			localTime,
+		});
+		effectPasses.push(
+			...resolveEffectPassGroups({
+				effects: parent.effects,
+				animations: parent.animations,
+				localTime,
+				width: canvasWidth,
+				height: canvasHeight,
+			}),
+		);
+	}
+	return { transform: composed, opacity: composedOpacity, effectPasses };
 }
 
 function resolveEffectPassGroups({
@@ -237,16 +309,23 @@ function resolveVisualState({
 		elementStartTime: params.timeOffset,
 		elementDuration: params.duration,
 	});
-	const transform = resolveTransformAtTime({
-		baseTransform: params.transform,
-		animations: params.animations,
-		localTime,
+	const inParents = applyCompoundParents({
+		parents: params.compoundParents,
+		time: context.time,
+		transform: resolveTransformAtTime({
+			baseTransform: params.transform,
+			animations: params.animations,
+			localTime,
+		}),
+		opacity: resolveOpacityAtTime({
+			baseOpacity: params.opacity,
+			animations: params.animations,
+			localTime,
+		}),
+		canvasWidth: context.renderer.width,
+		canvasHeight: context.renderer.height,
 	});
-	const opacity = resolveOpacityAtTime({
-		baseOpacity: params.opacity,
-		animations: params.animations,
-		localTime,
-	});
+	const { transform, opacity } = inParents;
 	const containScale = Math.min(
 		context.renderer.width / sourceWidth,
 		context.renderer.height / sourceHeight,
@@ -262,13 +341,16 @@ function resolveVisualState({
 		localTime,
 		transform,
 		opacity,
-		effectPasses: resolveEffectPassGroups({
-			effects: params.effects,
-			animations: params.animations,
-			localTime,
-			width: effectWidth,
-			height: effectHeight,
-		}),
+		effectPasses: [
+			...resolveEffectPassGroups({
+				effects: params.effects,
+				animations: params.animations,
+				localTime,
+				width: effectWidth,
+				height: effectHeight,
+			}),
+			...inParents.effectPasses,
+		],
 		transition,
 		adjustments: resolveAdjustmentsAtTime({
 			base: params.adjustments ?? NEUTRAL_ADJUSTMENTS,
@@ -305,8 +387,8 @@ async function resolveVideoNode({
 	const visualState = resolveVisualState({
 		params: node.params,
 		context,
-		sourceWidth: frame.canvas.width,
-		sourceHeight: frame.canvas.height,
+		sourceWidth: frame.width,
+		sourceHeight: frame.height,
 	});
 	if (!visualState) {
 		return null;
@@ -314,10 +396,11 @@ async function resolveVideoNode({
 
 	return {
 		...visualState,
-		source: frame.canvas,
+		source: frame.source,
 		sourceVersion: frame.timestamp,
-		sourceWidth: frame.canvas.width,
-		sourceHeight: frame.canvas.height,
+		sourceOpaque: !frame.hasAlpha,
+		sourceWidth: frame.width,
+		sourceHeight: frame.height,
 	};
 }
 
@@ -364,6 +447,15 @@ async function resolveImageNode({
 	node: ImageNode;
 	context: ResolveContext;
 }): Promise<ResolvedVisualSourceNodeState | null> {
+	if (node.params.isVector) {
+		return resolveVectorSource({
+			node,
+			context,
+			cacheKey: node.params.url,
+			load: () => loadImageSource({ url: node.params.url }),
+		});
+	}
+
 	const source = await loadImageSource({
 		url: node.params.url,
 		maxSourceSize: node.params.maxSourceSize,
@@ -386,6 +478,68 @@ async function resolveImageNode({
 	};
 }
 
+/**
+ * An SVG image or sticker, rendered at the size it is displayed so it stays
+ * sharp however far it is scaled up.
+ */
+async function resolveVectorSource({
+	node,
+	context,
+	cacheKey,
+	load,
+}: {
+	node: ImageNode | StickerNode;
+	context: ResolveContext;
+	cacheKey: string;
+	load: () => Promise<{ source: HTMLImageElement | OffscreenCanvas; width: number; height: number }>;
+}): Promise<ResolvedVisualSourceNodeState | null> {
+	const loaded = await load();
+	if (!(loaded.source instanceof HTMLImageElement)) {
+		return null;
+	}
+	const intrinsic =
+		loaded.width > 0 && loaded.height > 0
+			? { width: loaded.width, height: loaded.height }
+			: intrinsicVectorSize({ image: loaded.source });
+	const visualState = resolveVisualState({
+		params: node.params,
+		context,
+		sourceWidth: intrinsic.width,
+		sourceHeight: intrinsic.height,
+	});
+	if (!visualState) {
+		return null;
+	}
+
+	const longSide = vectorRasterSize({
+		displayedLongSide: displayedLongSide({
+			sourceWidth: intrinsic.width,
+			sourceHeight: intrinsic.height,
+			canvasWidth: context.renderer.width,
+			canvasHeight: context.renderer.height,
+			scaleX: visualState.transform.scaleX,
+			scaleY: visualState.transform.scaleY,
+			sourceSizeLimit: context.renderer.sourceSizeLimit,
+		}),
+	});
+	const raster = rasterizeVector({
+		cacheKey,
+		image: loaded.source,
+		intrinsicWidth: intrinsic.width,
+		intrinsicHeight: intrinsic.height,
+		longSide,
+	});
+	if (!raster) {
+		return null;
+	}
+	return {
+		...visualState,
+		source: raster.source,
+		sourceWidth: raster.width,
+		sourceHeight: raster.height,
+	};
+}
+
 async function resolveStickerNode({
 	node,
 	context,
@@ -396,6 +550,14 @@ async function resolveStickerNode({
 	const source = await loadStickerSource({ stickerId: node.params.stickerId });
 	const sourceWidth = node.params.intrinsicWidth ?? source.width;
 	const sourceHeight = node.params.intrinsicHeight ?? source.height;
+	if (isVectorUrl({ url: source.source.src })) {
+		return resolveVectorSource({
+			node,
+			context,
+			cacheKey: `sticker:${node.params.stickerId}`,
+			load: async () => ({ source: source.source, width: sourceWidth, height: sourceHeight }),
+		});
+	}
 	const visualState = resolveVisualState({
 		params: node.params,
 		context,
@@ -460,8 +622,9 @@ function resolveTextNode({
 		elementDuration: node.params.duration,
 	});
 	const background = buildTextBackgroundFromElement({ element: node.params });
-
-	return {
+	const inParents = applyCompoundParents({
+		parents: node.params.compoundParents,
+		time: context.time,
 		transform: resolveTransformAtTime({
 			baseTransform: node.params.transform,
 			animations: node.params.animations,
@@ -472,6 +635,13 @@ function resolveTextNode({
 			animations: node.params.animations,
 			localTime,
 		}),
+		canvasWidth: context.renderer.width,
+		canvasHeight: context.renderer.height,
+	});
+
+	return {
+		transform: inParents.transform,
+		opacity: inParents.opacity,
 		textColor: resolveColorAtTime({
 			baseColor:
 				typeof node.params.params.color === "string"
@@ -487,13 +657,16 @@ function resolveTextNode({
 			propertyPath: "background.color",
 			localTime,
 		}),
-		effectPasses: resolveEffectPassGroups({
-			effects: node.params.effects,
-			animations: node.params.animations,
-			localTime,
-			width: context.renderer.width,
-			height: context.renderer.height,
-		}),
+		effectPasses: [
+			...resolveEffectPassGroups({
+				effects: node.params.effects,
+				animations: node.params.animations,
+				localTime,
+				width: context.renderer.width,
+				height: context.renderer.height,
+			}),
+			...inParents.effectPasses,
+		],
 		adjustments: resolveAdjustmentsAtTime({
 			base: readAdjustmentsFromParams({ params: node.params.params }),
 			animations: node.params.animations,
@@ -573,10 +746,10 @@ async function resolveBackdropSource({
 		}
 
 		return {
-			source: frame.canvas,
+			source: frame.source,
 			version: frame.timestamp,
-			width: frame.canvas.width,
-			height: frame.canvas.height,
+			width: frame.width,
+			height: frame.height,
 		};
 	}
 

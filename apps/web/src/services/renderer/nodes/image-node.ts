@@ -7,6 +7,8 @@ import {
 export interface ImageNodeParams extends VisualNodeParams {
 	url: string;
 	maxSourceSize?: number;
+	/** SVG: rasterized at the displayed size instead of its declared size. */
+	isVector?: boolean;
 }
 
 export interface CachedImageSource {

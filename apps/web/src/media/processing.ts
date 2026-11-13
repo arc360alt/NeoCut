@@ -6,6 +6,8 @@ import type { MediaAsset } from "@/media/types";
 import { readVideoFile } from "./mediabunny";
 import type { VideoFileData } from "./mediabunny";
 import { renderThumbnailDataUrl } from "./thumbnail";
+import { INSECURE_CONTEXT_MESSAGE } from "@/utils/secure-context";
+import { convertAnimatedGif, isGifFile } from "./gif-to-video";
 
 export interface ProcessedMediaAsset extends Omit<MediaAsset, "id"> {}
 
@@ -82,6 +84,23 @@ async function generateImageThumbnail({
 	});
 }
 
+/**
+ * Animated GIFs become videos, so they play instead of showing one frame.
+ * Anything that can't be converted is imported as it is.
+ */
+async function toImportableFile({ file }: { file: File }): Promise<File> {
+	if (!isGifFile({ file })) return file;
+	try {
+		return (await convertAnimatedGif({ file })) ?? file;
+	} catch (error) {
+		console.error("Couldn't convert GIF to video:", file.name, error);
+		toast.error(`Couldn't animate ${file.name}`, {
+			description: "It was imported as a still image.",
+		});
+		return file;
+	}
+}
+
 export async function processMediaAssets({
 	files,
 	onProgress,
@@ -95,7 +114,8 @@ export async function processMediaAssets({
 	const total = fileArray.length;
 	let completed = 0;
 
-	for (const file of fileArray) {
+	for (const originalFile of fileArray) {
+		const file = await toImportableFile({ file: originalFile });
 		const fileType = getMediaTypeFromFile({ file });
 
 		if (!fileType) {
@@ -143,11 +163,22 @@ export async function processMediaAssets({
 					hasAudio = videoData.hasAudio;
 					thumbnailUrl = videoData.thumbnailUrl ?? undefined;
 
+					if (videoData.canDecode && videoData.decodeError) {
+						toast.error(`Can't decode ${file.name}`, {
+							description: `The browser accepted this video but failed to decode it (${videoData.decodeError}). It may show as black.`,
+						});
+					}
+
 					if (!videoData.canDecode) {
+						// Without WebCodecs nothing decodes; don't blame the codec.
+						const hasVideoDecoder =
+							window.isSecureContext && typeof VideoDecoder !== "undefined";
 						toast.error(`Can't preview ${file.name}`, {
-							description: getUnsupportedVideoDescription({
-								codec: videoData.codec,
-							}),
+							description: hasVideoDecoder
+								? getUnsupportedVideoDescription({ codec: videoData.codec })
+								: window.isSecureContext
+									? "This browser has no video decoder (WebCodecs). Try a recent Chrome or Firefox."
+									: INSECURE_CONTEXT_MESSAGE,
 						});
 					}
 				} catch (error) {

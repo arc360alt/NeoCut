@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	getHighestImportedVideoFps,
 	getRaisedProjectFpsForImportedMedia,
+	projectFrameRateForMedia,
 } from "@/fps/utils";
 
 describe("getHighestImportedVideoFps", () => {
@@ -61,5 +62,19 @@ describe("getRaisedProjectFpsForImportedMedia", () => {
 				],
 			}),
 		).toBeNull();
+	});
+});
+
+describe("projectFrameRateForMedia", () => {
+	test("keeps standard rates exactly", () => {
+		expect(projectFrameRateForMedia(29.97002997)).toEqual({ numerator: 30_000, denominator: 1_001 });
+		expect(projectFrameRateForMedia(60)).toEqual({ numerator: 60, denominator: 1 });
+	});
+
+	test("snaps variable-rate averages to the nearest common rate", () => {
+		expect(projectFrameRateForMedia(34.6)).toEqual({ numerator: 30, denominator: 1 });
+		expect(projectFrameRateForMedia(35)).toEqual({ numerator: 30, denominator: 1 });
+		expect(projectFrameRateForMedia(57)).toEqual({ numerator: 60, denominator: 1 });
+		expect(projectFrameRateForMedia(23)).toEqual({ numerator: 24, denominator: 1 });
 	});
 });

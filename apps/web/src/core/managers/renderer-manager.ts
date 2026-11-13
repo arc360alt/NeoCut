@@ -4,10 +4,14 @@ import type { ExportOptions, ExportResult } from "@/export";
 import { CanvasRenderer } from "@/services/renderer/canvas-renderer";
 import { SceneExporter } from "@/services/renderer/scene-exporter";
 import { buildScene } from "@/services/renderer/scene-builder";
-import { createTimelineAudioBuffer } from "@/media/audio";
+import { TimelineAudioStream } from "@/media/timeline-audio";
 import { formatTimecode } from "opencut-wasm";
-import { frameRateToFloat } from "@/fps/utils";
+
+/** Minimum time between export progress updates. */
+const PROGRESS_REPORT_INTERVAL_MS = 100;
 import { downloadBlob } from "@/utils/browser";
+import { flattenCompoundTracks } from "@/compound/flatten";
+import { frameRateToFloat, projectFrameRateForMedia } from "@/fps/utils";
 
 type SnapshotResult =
 	| { success: true; blob: Blob; filename: string }
@@ -147,10 +151,14 @@ export class RendererManager {
 		onProgress?: ({ progress }: { progress: number }) => void;
 		onCancel?: () => boolean;
 	}): Promise<ExportResult> {
-		const { format, quality, fps, includeAudio } = options;
+		const { format, quality, fps, includeAudio, transparentBackground } = options;
+		const isTransparent = (transparentBackground ?? false) && format === "webm";
 
 		try {
-			const tracks = this.editor.scenes.getActiveScene().tracks;
+			const tracks = flattenCompoundTracks({
+				tracks: this.editor.scenes.getActiveScene().tracks,
+				scenes: this.editor.scenes.getScenes(),
+			});
 			const mediaAssets = this.editor.media.getAssets();
 			const activeProject = this.editor.project.getActive();
 
@@ -163,25 +171,27 @@ export class RendererManager {
 				return { success: false, error: "Project is empty" };
 			}
 
-			const exportFps = fps ?? activeProject.settings.fps;
+			// Projects made before rates were snapped can be at e.g. 35 fps,
+			// which phone apps and upload sites fail to process.
+			const exportFps = projectFrameRateForMedia(
+				frameRateToFloat(fps ?? activeProject.settings.fps),
+			);
 			const canvasSize = activeProject.settings.canvasSize;
 
-			let audioBuffer: AudioBuffer | null = null;
-			if (includeAudio) {
-				onProgress?.({ progress: 0.05 });
-				audioBuffer = await createTimelineAudioBuffer({
-					tracks,
-					mediaAssets,
-					duration,
-				});
-			}
+			// Mixed on demand while exporting; see TimelineAudioStream.
+			const audioStream = includeAudio
+				? TimelineAudioStream.create({ tracks, mediaAssets, duration })
+				: null;
 
 			const scene = buildScene({
 				tracks,
 				mediaAssets,
 				duration,
 				canvasSize,
-				background: activeProject.settings.background,
+				// A transparent export leaves the project background out.
+				background: isTransparent
+					? { type: "color", color: "transparent" }
+					: activeProject.settings.background,
 			});
 
 			const exporter = new SceneExporter({
@@ -190,15 +200,21 @@ export class RendererManager {
 				fps: exportFps,
 				format,
 				quality,
-				shouldIncludeAudio: !!includeAudio,
-				audioBuffer: audioBuffer || undefined,
+				shouldIncludeAudio: !!audioStream,
+				audioStream: audioStream ?? undefined,
+				transparentBackground: isTransparent,
 			});
 
+			// Frames finish far faster than anyone reads a progress bar; reporting
+			// each one re-renders the editor dozens of times a second.
+			let lastProgressReport = 0;
 			exporter.on("progress", (progress) => {
-				const adjustedProgress = includeAudio
-					? 0.05 + progress * 0.95
-					: progress;
-				onProgress?.({ progress: adjustedProgress });
+				const now = performance.now();
+				if (progress < 1 && now - lastProgressReport < PROGRESS_REPORT_INTERVAL_MS) {
+					return;
+				}
+				lastProgressReport = now;
+				onProgress?.({ progress });
 			});
 
 			let cancelled = false;
@@ -212,23 +228,24 @@ export class RendererManager {
 			const cancelInterval = setInterval(checkCancel, 100);
 
 			try {
-				const buffer = await exporter.export({ rootNode: scene });
+				const file = await exporter.export({ rootNode: scene });
 				clearInterval(cancelInterval);
 
 				if (cancelled) {
 					return { success: false, cancelled: true };
 				}
 
-				if (!buffer) {
-					return { success: false, error: "Export failed to produce buffer" };
+				if (!file) {
+					return { success: false, error: "Export failed to produce a file" };
 				}
 
 				return {
 					success: true,
-					buffer,
+					file,
 				};
 			} finally {
 				clearInterval(cancelInterval);
+				await audioStream?.close();
 			}
 		} catch (error) {
 			console.error("Export failed:", error);

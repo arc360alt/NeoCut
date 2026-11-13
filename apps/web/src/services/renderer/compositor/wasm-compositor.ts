@@ -44,6 +44,11 @@ class WasmCompositor {
 	private canvas: HTMLCanvasElement | null = null;
 	private initializedSize: { width: number; height: number } | null = null;
 	private cache = new Map<string, RenderedCacheEntry | ExternalCacheEntry>();
+	/**
+	 * The compositor only imports canvases; other sources (decoded video
+	 * frames) are drawn into one of these first, kept per texture.
+	 */
+	private uploadCanvases = new Map<string, OffscreenCanvas>();
 
 	ensureInitialized({ width, height }: { width: number; height: number }) {
 		if (!this.canvas) {
@@ -76,6 +81,7 @@ class WasmCompositor {
 			if (!nextIds.has(previousId)) {
 				releaseTexture(previousId);
 				this.cache.delete(previousId);
+				this.uploadCanvases.delete(previousId);
 			}
 		}
 
@@ -117,12 +123,7 @@ class WasmCompositor {
 		});
 		uploadTexture({
 			id: texture.id,
-			source: ensureOffscreenCanvas({
-				source: texture.source,
-				width: texture.width,
-				height: texture.height,
-				label: `texture upload ${texture.id}`,
-			}),
+			source: this.toUploadCanvas({ texture }),
 			width: texture.width,
 			height: texture.height,
 		});
@@ -133,6 +134,30 @@ class WasmCompositor {
 			width: texture.width,
 			height: texture.height,
 		});
+	}
+
+	private toUploadCanvas({
+		texture,
+	}: {
+		texture: ExternalTextureDescriptor;
+	}): OffscreenCanvas {
+		const { source, width, height } = texture;
+		if (source instanceof OffscreenCanvas) {
+			return source;
+		}
+
+		let canvas = this.uploadCanvases.get(texture.id);
+		if (!canvas || canvas.width !== width || canvas.height !== height) {
+			canvas = createBackingCanvas({ width, height });
+			this.uploadCanvases.set(texture.id, canvas);
+		}
+		const context = canvas.getContext("2d");
+		if (!context) {
+			throw new Error(`Failed to get 2d context for texture upload ${texture.id}`);
+		}
+		context.clearRect(0, 0, width, height);
+		context.drawImage(source, 0, 0, width, height);
+		return canvas;
 	}
 
 	private syncRenderedTexture(texture: RenderedTextureDescriptor) {
@@ -208,47 +233,19 @@ function createBackingCanvas({
 	return new OffscreenCanvas(width, height);
 }
 
-function ensureOffscreenCanvas({
-	source,
-	width,
-	height,
-	label,
-}: {
-	source: CanvasImageSource;
-	width: number;
-	height: number;
-	label: string;
-}): OffscreenCanvas {
-	if (source instanceof OffscreenCanvas) {
-		return source;
-	}
-
-	if (typeof OffscreenCanvas === "undefined") {
-		throw new Error(`OffscreenCanvas is required for ${label}`);
-	}
-
-	const canvas = new OffscreenCanvas(width, height);
-	const context = canvas.getContext("2d");
-	if (!context) {
-		throw new Error(`Failed to get 2d context for ${label}`);
-	}
-	context.clearRect(0, 0, width, height);
-	context.drawImage(source, 0, 0, width, height);
-	return canvas;
-}
-
 /**
- * Published `opencut-wasm` builds (<= 0.2.10) read scene effect passes from
- * `effect_pass_groups` instead of `effectPassGroups`. Send both so every
- * build accepts the frame.
+ * Scene effect passes are sent as `effect_pass_groups` only. Published
+ * `opencut-wasm` builds (<= 0.2.10) read just that name; newer builds read
+ * `effectPassGroups` but accept `effect_pass_groups` as an alias, and reject
+ * a frame that carries both.
  */
 function toWasmFrame(frame: FrameDescriptor) {
 	return {
 		...frame,
-		items: frame.items.map((item) =>
-			item.type === "sceneEffect"
-				? { ...item, effect_pass_groups: item.effectPassGroups }
-				: item,
-		),
+		items: frame.items.map((item) => {
+			if (item.type !== "sceneEffect") return item;
+			const { effectPassGroups, ...rest } = item;
+			return { ...rest, effect_pass_groups: effectPassGroups };
+		}),
 	};
 }

@@ -36,6 +36,7 @@ import {
 	getBookmarkPreviewOverlaySource,
 	getBookmarksActiveAtTime,
 } from "@/timeline/bookmarks/index";
+import { getInsecureContextInfo } from "@/utils/secure-context";
 import type { Bookmark } from "@/timeline";
 
 export default function Editor() {
@@ -46,6 +47,7 @@ export default function Editor() {
 		<MobileGate>
 			<EditorProvider projectId={projectId}>
 				<div className="bg-background flex h-screen w-screen flex-col overflow-hidden">
+					<InsecureContextBanner />
 					<DegradedRendererBanner />
 					<EditorHeader />
 					<div className="min-h-0 min-w-0 flex-1">
@@ -58,6 +60,28 @@ export default function Editor() {
 				</div>
 			</EditorProvider>
 		</MobileGate>
+	);
+}
+
+/** Without a secure context the editor can't store or decode media at all. */
+function InsecureContextBanner() {
+	const [info] = useState(() => getInsecureContextInfo());
+	if (!info) return null;
+
+	return (
+		<div
+			role="alert"
+			className="bg-destructive/15 text-destructive border-destructive/30 flex min-h-9 items-center justify-center gap-2 border-b px-4 py-1.5 text-center text-xs"
+		>
+			<span>
+				Importing and exporting are blocked at {info.currentOrigin}: the browser
+				only allows file storage and video decoding on https or localhost.{" "}
+				<a className="font-medium underline" href={info.localhostUrl}>
+					Open this project on localhost
+				</a>
+				.
+			</span>
+		</div>
 	);
 }
 

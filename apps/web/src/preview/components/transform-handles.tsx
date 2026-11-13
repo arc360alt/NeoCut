@@ -26,7 +26,7 @@ const CORNERS: Corner[] = [
 	"bottom-left",
 	"bottom-right",
 ];
-const EDGES: Edge[] = ["right", "left", "bottom"];
+const EDGES: Edge[] = ["top", "right", "bottom", "left"];
 
 export function TransformHandles({
 	onSnapLinesChange,
@@ -105,6 +105,7 @@ export function TransformHandles({
 				return (
 					<CornerHandle
 						key={corner}
+						label={`Resize ${corner} corner (Shift keeps proportions)`}
 						cursor={getResizeCursor({ angleDeg })}
 						screen={screen}
 						onPointerDown={(event) =>
@@ -124,6 +125,7 @@ export function TransformHandles({
 				return (
 					<EdgeHandle
 						key={edge}
+						label={`Resize ${edge} edge (Shift keeps proportions)`}
 						edge={edge}
 						screen={screen}
 						rotation={bounds.rotation}
@@ -134,6 +136,7 @@ export function TransformHandles({
 				);
 			})}
 			<IconHandle
+					label="Rotate"
 				icon={Rotate01Icon}
 				screen={rotationHandleScreen}
 				onPointerDown={(event) => handleRotationPointerDown({ event })}

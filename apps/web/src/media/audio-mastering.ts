@@ -101,3 +101,43 @@ function clampAudioBufferPeak({
 		}
 	}
 }
+
+/**
+ * The master limiter applied while streaming, a window at a time. Audio that
+ * stays under the output headroom passes through untouched; louder peaks are
+ * pulled down instantly and released smoothly, then hard-clamped.
+ */
+export class StreamingPeakLimiter {
+	private envelope = 1;
+	private readonly releaseCoefficient: number;
+
+	constructor({ sampleRate }: { sampleRate: number }) {
+		this.releaseCoefficient =
+			1 - Math.exp(-1 / (MASTER_LIMITER_RELEASE_SECONDS * sampleRate));
+	}
+
+	process({ channels }: { channels: Float32Array[] }): void {
+		const length = channels[0]?.length ?? 0;
+		for (let index = 0; index < length; index++) {
+			let peak = 0;
+			for (const data of channels) {
+				const magnitude = Math.abs(data[index]);
+				if (magnitude > peak) peak = magnitude;
+			}
+			const target = peak > MASTER_OUTPUT_HEADROOM ? MASTER_OUTPUT_HEADROOM / peak : 1;
+			if (target < this.envelope) {
+				this.envelope = target;
+			} else {
+				this.envelope += (target - this.envelope) * this.releaseCoefficient;
+				if (this.envelope > 0.99999) this.envelope = 1;
+			}
+			if (this.envelope === 1 && peak <= MASTER_OUTPUT_HEADROOM) continue;
+			for (const data of channels) {
+				data[index] = Math.max(
+					-MASTER_OUTPUT_HEADROOM,
+					Math.min(MASTER_OUTPUT_HEADROOM, data[index] * this.envelope),
+				);
+			}
+		}
+	}
+}

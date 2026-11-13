@@ -29,6 +29,7 @@ import { DEFAULTS } from "@/timeline/defaults";
 import { getElementFontFamilies } from "@/timeline/element-utils";
 import { getRaisedProjectFpsForImportedMedia } from "@/fps/utils";
 import type { MediaAsset } from "@/media/types";
+import { flattenCompoundTracks } from "@/compound/flatten";
 
 export interface MigrationState {
 	isMigrating: boolean;
@@ -313,6 +314,7 @@ export class ProjectManager {
 
 		this.editor.media.clearAllAssets();
 		this.editor.scenes.clearScenes();
+		this.editor.save.discardPending();
 	}
 
 	async renameProject({
@@ -537,10 +539,15 @@ export class ProjectManager {
 		try {
 			const didUpdateThumbnail = await this.updateThumbnailFromTimeline();
 			if (didUpdateThumbnail) {
-				await this.editor.save.flush();
+				this.editor.save.markDirty({ force: true });
 			}
 		} catch (error) {
 			console.error("Failed to generate project thumbnail on exit:", error);
+		}
+
+		// Write edits still waiting on the save debounce before the project closes.
+		if (this.editor.save.getIsDirty()) {
+			await this.editor.save.flush();
 		}
 	}
 
@@ -650,7 +657,10 @@ export class ProjectManager {
 	private async updateThumbnailFromTimeline(): Promise<boolean> {
 		if (!this.active) return false;
 
-		const tracks = this.editor.scenes.getActiveScene().tracks;
+		const tracks = flattenCompoundTracks({
+			tracks: this.editor.scenes.getActiveScene().tracks,
+			scenes: this.editor.scenes.getScenes(),
+		});
 		const mediaAssets = this.editor.media.getAssets();
 		const duration = this.editor.timeline.getTotalDuration();
 		const { canvasSize, background } = this.active.settings;

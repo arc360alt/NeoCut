@@ -10,7 +10,7 @@ import { generateUUID } from "@/utils/id";
 import { requiresMediaId } from "@/timeline/element-utils";
 import type { MediaAsset } from "@/media/types";
 import { DEFAULT_NEW_ELEMENT_DURATION } from "@/timeline/creation";
-import { floatToFrameRate } from "@/fps/utils";
+import { projectFrameRateForMedia } from "@/fps/utils";
 import { graphicsRegistry, registerDefaultGraphics } from "@/graphics";
 import {
 	applyPlacement,
@@ -87,7 +87,11 @@ export class InsertElementCommand extends Command {
 				(item: MediaAsset) => item.id === newElement.mediaId,
 			);
 
-			if (asset?.width && asset?.height) {
+			// An SVG's declared size is arbitrary (often 100–300 px); it would
+			// shrink the whole project, so vectors keep the current canvas.
+			const isVector =
+				asset?.file?.type === "image/svg+xml" || /\.svg$/i.test(asset?.name ?? "");
+			if (asset?.width && asset?.height && !isVector) {
 				const nextCanvasSize = { width: asset.width, height: asset.height };
 				const shouldSetOriginalCanvasSize =
 					!activeProject?.settings.originalCanvasSize;
@@ -104,7 +108,7 @@ export class InsertElementCommand extends Command {
 
 			if (asset?.type === "video" && asset?.fps) {
 				editor.project.updateSettings({
-					settings: { fps: floatToFrameRate(asset.fps) },
+					settings: { fps: projectFrameRateForMedia(asset.fps) },
 					pushHistory: false,
 				});
 			}

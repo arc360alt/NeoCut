@@ -120,6 +120,18 @@ export class PlayheadController {
 		return this.lastMouseClientX;
 	}
 
+	/**
+	 * Re-seeks to the time under the pointer. While the timeline auto-scrolls
+	 * at an edge the pointer stays still but the time beneath it changes.
+	 */
+	rescrubAtPointer(): void {
+		if (this.session.kind !== "scrubbing") return;
+		this.scrub({
+			clientX: this.lastMouseClientX,
+			isElementSnappingEnabled: true,
+		});
+	}
+
 	destroy(): void {
 		this.deactivate();
 	}
@@ -135,8 +147,9 @@ export class PlayheadController {
 			hasMoved: false,
 			currentTime: null,
 		};
+		this.lastMouseClientX = event.clientX;
 		this.config.setScrubbing(true);
-		this.scrub({ event, isElementSnappingEnabled: true });
+		this.scrub({ clientX: event.clientX, isElementSnappingEnabled: true });
 		this.activate();
 	}
 
@@ -151,9 +164,10 @@ export class PlayheadController {
 			hasMoved: false,
 			currentTime: null,
 		};
+		this.lastMouseClientX = event.clientX;
 		this.config.setScrubbing(true);
 		// No element-edge snapping on initial ruler click — avoids a jarring jump.
-		this.scrub({ event, isElementSnappingEnabled: false });
+		this.scrub({ clientX: event.clientX, isElementSnappingEnabled: false });
 		this.activate();
 	}
 
@@ -230,10 +244,10 @@ export class PlayheadController {
 	 * is always applied.
 	 */
 	private scrub({
-		event,
+		clientX,
 		isElementSnappingEnabled,
 	}: {
-		event: MouseEvent | ReactMouseEvent;
+		clientX: number;
 		isElementSnappingEnabled: boolean;
 	}): void {
 		const ruler = this.config.getRulerEl();
@@ -244,7 +258,7 @@ export class PlayheadController {
 
 		const { zoomLevel, duration } = this.config;
 		const rawTime = pixelToTime({
-			clientX: event.clientX,
+			clientX,
 			rulerEl: ruler,
 			zoomLevel,
 			duration,
@@ -281,12 +295,12 @@ export class PlayheadController {
 			this.session.currentTime = time;
 		}
 		this.config.seek(time);
-		this.lastMouseClientX = event.clientX;
+		this.lastMouseClientX = clientX;
 	}
 
 	private handleMouseMove(event: MouseEvent): void {
 		if (this.session.kind !== "scrubbing") return;
-		this.scrub({ event, isElementSnappingEnabled: true });
+		this.scrub({ clientX: event.clientX, isElementSnappingEnabled: true });
 		if (this.session.didStartFromRuler) {
 			this.session.hasMoved = true;
 		}
@@ -309,7 +323,7 @@ export class PlayheadController {
 
 		// Ruler click without drag: snap to clicked position on mouseup.
 		if (session.didStartFromRuler && !session.hasMoved) {
-			this.scrub({ event, isElementSnappingEnabled: false });
+			this.scrub({ clientX: event.clientX, isElementSnappingEnabled: false });
 		}
 
 		this.session = { kind: "idle" };

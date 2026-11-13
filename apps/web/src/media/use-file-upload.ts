@@ -1,5 +1,6 @@
 import { useState, useRef } from "react";
 import { useEditor } from "@/editor/use-editor";
+import { isExternalFileDrag, readDroppedFiles } from "./drop-files";
 
 interface UseFileUploadOptions {
 	accept?: string;
@@ -20,7 +21,7 @@ export function useFileUpload({
 	function containsFiles(dataTransfer: DataTransfer): boolean {
 		return (
 			!editor.timeline.dragSource.isActive() &&
-			dataTransfer.types.includes("Files")
+			isExternalFileDrag({ dataTransfer })
 		);
 	}
 
@@ -75,7 +76,7 @@ export function useFileUpload({
 		dragCounterRef.current = 0;
 
 		if (onFilesSelected && containsFiles(e.dataTransfer)) {
-			const files = Array.from(e.dataTransfer.files);
+			const files = readDroppedFiles({ dataTransfer: e.dataTransfer });
 			const shouldUseMultiple = multiple ?? false;
 
 			if (shouldUseMultiple) {

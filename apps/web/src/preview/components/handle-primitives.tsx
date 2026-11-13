@@ -24,6 +24,7 @@ export function HandleButton({
 	cursor,
 	hitAreaSize,
 	className,
+	label,
 	onPointerDown,
 	onPointerMove,
 	onPointerUp,
@@ -33,6 +34,8 @@ export function HandleButton({
 	cursor?: string;
 	hitAreaSize: number;
 	className?: string;
+	/** Accessible name; handles are icon-only. */
+	label?: string;
 	onPointerDown: (event: React.PointerEvent) => void;
 	onPointerMove: (event: React.PointerEvent) => void;
 	onPointerUp: (event: React.PointerEvent) => void;
@@ -41,6 +44,7 @@ export function HandleButton({
 	return (
 		<button
 			type="button"
+			aria-label={label}
 			className={cn(
 				"absolute flex items-center justify-center outline-none",
 				className,
@@ -71,7 +75,9 @@ export function CornerHandle({
 	onPointerDown,
 	onPointerMove,
 	onPointerUp,
+	label,
 }: {
+	label?: string;
 	cursor?: string;
 	screen: { x: number; y: number };
 	onPointerDown: (event: React.PointerEvent) => void;
@@ -80,6 +86,7 @@ export function CornerHandle({
 }) {
 	return (
 		<HandleButton
+			label={label}
 			screen={screen}
 			cursor={cursor}
 			hitAreaSize={HANDLE_HIT_AREA_SIZE}
@@ -136,8 +143,10 @@ export function EdgeHandle({
 	onPointerDown,
 	onPointerMove,
 	onPointerUp,
+	label,
 }: {
-	edge: "right" | "left" | "bottom";
+	label?: string;
+	edge: "top" | "right" | "bottom" | "left";
 	screen: { x: number; y: number };
 	rotation: number;
 	onPointerDown: (event: React.PointerEvent) => void;
@@ -157,6 +166,7 @@ export function EdgeHandle({
 
 	return (
 		<HandleButton
+			label={label}
 			screen={screen}
 			cursor={cursor}
 			hitAreaSize={HANDLE_HIT_AREA_SIZE}
@@ -178,7 +188,9 @@ export function IconHandle({
 	onPointerDown,
 	onPointerMove,
 	onPointerUp,
+	label,
 }: {
+	label?: string;
 	icon: IconSvgElement;
 	screen: { x: number; y: number };
 	onPointerDown: (event: React.PointerEvent) => void;
@@ -187,6 +199,7 @@ export function IconHandle({
 }) {
 	return (
 		<HandleButton
+			label={label}
 			screen={screen}
 			hitAreaSize={ICON_HANDLE_RADIUS * 2}
 			className="rounded-full bg-white text-black shadow-sm"

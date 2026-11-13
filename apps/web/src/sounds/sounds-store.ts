@@ -5,6 +5,8 @@ import { toast } from "sonner";
 import { EditorCore } from "@/core";
 import { buildLibraryAudioElement } from "@/timeline/element-utils";
 import { mediaTimeFromSeconds } from "@/wasm";
+import { downloadWithProgress, type ImportProgress } from "@/media/download";
+import { rememberLibraryAudioFile } from "@/media/audio";
 
 interface SoundsStore {
 	topSoundEffects: SoundEffect[];
@@ -28,7 +30,13 @@ interface SoundsStore {
 	isLoadingSavedSounds: boolean;
 	savedSoundsError: string | null;
 
-	addSoundToTimeline: ({ sound }: { sound: SoundEffect }) => Promise<boolean>;
+	addSoundToTimeline: ({
+		sound,
+		onProgress,
+	}: {
+		sound: SoundEffect;
+		onProgress?: (progress: ImportProgress) => void;
+	}) => Promise<boolean>;
 	setTopSoundEffects: ({ sounds }: { sounds: SoundEffect[] }) => void;
 	setLoading: ({ loading }: { loading: boolean }) => void;
 	setError: ({ error }: { error: string | null }) => void;
@@ -206,7 +214,7 @@ export const useSoundsStore = create<SoundsStore>((set, get) => ({
 		}
 	},
 
-	addSoundToTimeline: async ({ sound }) => {
+	addSoundToTimeline: async ({ sound, onProgress }) => {
 		const audioUrl = sound.previewUrl;
 		if (!audioUrl) {
 			toast.error("Sound file not available");
@@ -217,13 +225,22 @@ export const useSoundsStore = create<SoundsStore>((set, get) => ({
 			const editor = EditorCore.getInstance();
 			const currentTime = editor.playback.getCurrentTime();
 
-			const response = await fetch(audioUrl);
-			if (!response.ok)
-				throw new Error(`Failed to download audio: ${response.statusText}`);
+			const blob = await downloadWithProgress({
+				url: audioUrl,
+				onProgress: (fraction) => onProgress?.({ stage: "downloading", fraction }),
+			});
+			onProgress?.({ stage: "importing" });
+			rememberLibraryAudioFile({
+				sourceUrl: audioUrl,
+				file: new File([blob], `${sound.name}.mp3`, {
+					type: blob.type || "audio/mpeg",
+				}),
+			});
 
-			const arrayBuffer = await response.arrayBuffer();
 			const audioContext = new AudioContext();
-			const buffer = await audioContext.decodeAudioData(arrayBuffer);
+			const buffer = await audioContext
+				.decodeAudioData(await blob.arrayBuffer())
+				.finally(() => void audioContext.close());
 
 			const element = buildLibraryAudioElement({
 				sourceUrl: audioUrl,
