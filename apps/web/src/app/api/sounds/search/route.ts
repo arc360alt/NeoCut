@@ -196,13 +196,25 @@ export async function GET(request: NextRequest) {
 			);
 		}
 
+		const apiKey = webEnv.FREESOUND_API_KEY;
+		if (!apiKey) {
+			return NextResponse.json(
+				{
+					error: "Sound search isn't configured",
+					message:
+						"Add FREESOUND_API_KEY to the environment to enable sound search.",
+				},
+				{ status: 503 },
+			);
+		}
+
 		const baseUrl = "https://freesound.org/apiv2/search/text/";
 
 		const sortParam = buildSortParameter({ query, sort });
 
 		const params = new URLSearchParams({
 			query: query || "",
-			token: webEnv.FREESOUND_API_KEY,
+			token: apiKey,
 			page: page.toString(),
 			page_size: pageSize.toString(),
 			sort: sortParam,
