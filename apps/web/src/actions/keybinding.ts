@@ -59,3 +59,24 @@ export function isShortcutKey(value: string): value is ShortcutKey {
 	const key = value.slice(lastPlus + 1);
 	return MODIFIER_SET.has(modifier) && isKey(key);
 }
+
+/**
+ * Shortcuts the browser keeps for itself (closing or opening tabs and
+ * windows). Pages never receive these, so binding one would do nothing.
+ * "ctrl" is also ⌘ on macOS, matching how keybindings are recorded.
+ */
+const BROWSER_RESERVED_SHORTCUTS: ReadonlySet<string> = new Set<ShortcutKey>([
+	"ctrl+w",
+	"ctrl+t",
+	"ctrl+n",
+	"ctrl+q",
+	"ctrl+tab",
+	"ctrl+shift+w",
+	"ctrl+shift+t",
+	"ctrl+shift+n",
+	"ctrl+shift+tab",
+]);
+
+export function isBrowserReservedShortcut(key: ShortcutKey): boolean {
+	return BROWSER_RESERVED_SHORTCUTS.has(key);
+}

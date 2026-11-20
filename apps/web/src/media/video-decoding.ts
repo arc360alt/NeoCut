@@ -94,6 +94,20 @@ export function isSoftwareVideoDecodingEnabled(): boolean {
 	return useSoftwareDecoding;
 }
 
+/** Turns software decoding on or off for decoders created from now on. */
+export function setSoftwareVideoDecoding({ enabled }: { enabled: boolean }): void {
+	useSoftwareDecoding = enabled;
+	try {
+		if (enabled) {
+			globalThis.localStorage?.setItem(STORAGE_KEY, "1");
+		} else {
+			globalThis.localStorage?.removeItem(STORAGE_KEY);
+		}
+	} catch {
+		// Not remembered across visits.
+	}
+}
+
 /**
  * Switches every decoder created from now on to software decoding, and
  * remembers that for later visits. Some GPU drivers (e.g. VA-API on Linux)

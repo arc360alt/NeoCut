@@ -11,6 +11,12 @@ class EffectPreviewService {
 	private testSourceCanvas: OffscreenCanvas | null = null;
 	private previewImageElement: HTMLImageElement | null = null;
 	private onReadyCallbacks = new Set<() => void>();
+	/**
+	 * Bumped after every thumbnail render. On WebGL the GPU context draws
+	 * thumbnails through the same canvas the main preview mounts, so the
+	 * preview watches this to know it must redraw its own frame.
+	 */
+	private renderVersion = 0;
 
 	readonly PREVIEW_SIZE = PREVIEW_SIZE;
 
@@ -21,6 +27,10 @@ class EffectPreviewService {
 	onPreviewImageReady({ callback }: { callback: () => void }): () => void {
 		this.onReadyCallbacks.add(callback);
 		return () => this.onReadyCallbacks.delete(callback);
+	}
+
+	getRenderVersion(): number {
+		return this.renderVersion;
 	}
 
 	renderPreview({
@@ -72,6 +82,7 @@ class EffectPreviewService {
 			});
 
 			targetCtx.drawImage(result, 0, 0, size, size);
+			this.renderVersion++;
 		} catch (error) {
 			console.warn("Failed to render effect preview", { effectType, error });
 			targetCtx.clearRect(0, 0, size, size);

@@ -55,6 +55,7 @@ for dir in "$ROOT/node_modules" "$ROOT/apps/web/node_modules"; do
 		rm -rf "$dir/opencut-wasm"
 		mkdir -p "$dir"
 		cp -R "$PKG_DIR" "$dir/opencut-wasm"
+		touch "$dir/opencut-wasm/.local-build"
 		echo "  $dir/opencut-wasm <- rust/wasm/pkg"
 	fi
 done

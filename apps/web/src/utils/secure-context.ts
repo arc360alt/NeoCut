@@ -19,4 +19,4 @@ export function getInsecureContextInfo(): {
 }
 
 export const INSECURE_CONTEXT_MESSAGE =
-	"This address isn't a secure context, so the browser blocks file storage and video decoding. Open OpenCut at http://localhost instead.";
+	"This address isn't a secure context, so the browser blocks file storage and video decoding. Open NeoCut at http://localhost instead.";

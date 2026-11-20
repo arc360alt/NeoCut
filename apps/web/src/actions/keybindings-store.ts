@@ -3,7 +3,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { TActionWithOptionalArgs } from "@/actions";
-import { getDefaultShortcuts } from "@/actions";
+import { getActionDefinition, getDefaultShortcuts } from "@/actions";
 import { isTypableDOMElement } from "@/utils/browser";
 import { isAppleDevice } from "@/utils/platform";
 import type {
@@ -34,6 +34,20 @@ interface KeybindingsState {
 		action: TActionWithOptionalArgs;
 	}) => void;
 	removeKeybinding: (key: ShortcutKey) => void;
+	/**
+	 * Binds `key` to `action`, taking it away from any action that had it.
+	 * With `replaceKey`, that binding of the action is swapped for `key`.
+	 */
+	assignKeybinding: (params: {
+		key: ShortcutKey;
+		action: TActionWithOptionalArgs;
+		replaceKey?: ShortcutKey | null;
+	}) => void;
+	/**
+	 * Restores one action's default keys. Defaults now used by another action
+	 * are left alone and returned, so the caller can say which were skipped.
+	 */
+	resetActionKeybindings: (action: TActionWithOptionalArgs) => ShortcutKey[];
 	resetToDefaults: () => void;
 	importKeybindings: (config: KeybindingConfig) => void;
 	exportKeybindings: () => Record<string, TActionWithOptionalArgs>;
@@ -123,6 +137,33 @@ export const useKeybindingsStore = create<KeybindingsState>()(
 						isCustomized: true,
 					};
 				});
+			},
+
+			assignKeybinding: ({ key, action, replaceKey }) => {
+				set((state) => {
+					const next = new Map(state.keybindings);
+					if (replaceKey && replaceKey !== key) next.delete(replaceKey);
+					next.set(key, action);
+					return { keybindings: next, isCustomized: true };
+				});
+			},
+
+			resetActionKeybindings: (action) => {
+				const defaults = getActionDefinition({ action }).defaultShortcuts ?? [];
+				const next = new Map(get().keybindings);
+				for (const [key, mapped] of next) {
+					if (mapped === action) next.delete(key);
+				}
+				const skipped: ShortcutKey[] = [];
+				for (const key of defaults) {
+					if (next.has(key)) {
+						skipped.push(key);
+					} else {
+						next.set(key, action);
+					}
+				}
+				set({ keybindings: next, isCustomized: true });
+				return skipped;
 			},
 
 			resetToDefaults: () => {

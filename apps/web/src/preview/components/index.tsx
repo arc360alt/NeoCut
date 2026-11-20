@@ -20,6 +20,7 @@ import type {
 } from "@/preview/overlays";
 import { PreviewContextMenu } from "./context-menu";
 import { PreviewToolbar } from "./toolbar";
+import { effectPreviewService } from "@/services/renderer/effect-preview";
 import { flattenCompoundTracks } from "@/compound/flatten";
 import {
 	PreviewViewportProvider,
@@ -146,6 +147,7 @@ function PreviewCanvas({
 	const lastFrameRef = useRef(-1);
 	const lastSceneRef = useRef<RootNode | null>(null);
 	const renderingRef = useRef(false);
+	const lastEffectPreviewVersionRef = useRef(-1);
 	const { width: nativeWidth, height: nativeHeight } = usePreviewSize();
 	const viewportSize = useContainerSize({ containerRef: viewportRef });
 	const editor = useEditor();
@@ -197,10 +199,13 @@ function PreviewCanvas({
 			(TICKS_PER_SECOND * renderer.fps.denominator) / renderer.fps.numerator,
 		);
 		const frame = Math.floor(renderTime / ticksPerFrame);
+		// Effect thumbnails can draw over the shared WebGL canvas; redraw after.
+		const effectPreviewVersion = effectPreviewService.getRenderVersion();
 
 		if (
 			frame === lastFrameRef.current &&
-			renderTree === lastSceneRef.current
+			renderTree === lastSceneRef.current &&
+			effectPreviewVersion === lastEffectPreviewVersionRef.current
 		) {
 			return;
 		}
@@ -208,6 +213,7 @@ function PreviewCanvas({
 		renderingRef.current = true;
 		lastSceneRef.current = renderTree;
 		lastFrameRef.current = frame;
+		lastEffectPreviewVersionRef.current = effectPreviewVersion;
 		renderer
 			.render({ node: renderTree, time: renderTime })
 			.then(() => {

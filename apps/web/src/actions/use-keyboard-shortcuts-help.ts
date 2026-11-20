@@ -17,7 +17,8 @@ export interface KeyboardShortcut {
 	icon?: React.ReactNode;
 }
 
-function formatKey({ key }: { key: string }): string {
+/** Turns a stored key like "ctrl+shift+z" into display text for this platform. */
+export function formatKey({ key }: { key: string }): string {
 	return key
 		.replace("ctrl", getPlatformSpecialKey())
 		.replace("alt", getPlatformAlternateKey())

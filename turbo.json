@@ -16,7 +16,9 @@
 				"MARBLE_WORKSPACE_KEY",
 				"FREESOUND_CLIENT_ID",
 				"FREESOUND_API_KEY",
-				"PEXELS_API_KEY"
+				"PEXELS_API_KEY",
+				"VERCEL_GIT_COMMIT_SHA",
+				"VERCEL_GIT_COMMIT_REF"
 			]
 		},
 		"check-types": {

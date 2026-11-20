@@ -1,4 +1,6 @@
-# OpenCut (Legacy)
+# This is a fork of the original [OpenCut](https://github.com/OpenCut-app/OpenCut) project to add more features and expand it more, as the rewrite of OpenCut has not had any progress done to it in a while. I forgot to properly fork this repo when I made it and I'm not about to go and remake it to be properly forked.
+
+# NeoCut
 
 This is the original OpenCut codebase. It's archived and no longer maintained.
 
