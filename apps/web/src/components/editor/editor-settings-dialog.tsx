@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Image from "next/image";
 import { useTheme } from "next-themes";
 import {
 	GithubIcon,
@@ -465,6 +466,20 @@ function AboutSettings() {
 						View on GitHub
 					</a>
 				</Button>
+			</div>
+
+			<div className="bg-muted/40 flex items-center gap-4 rounded-md border p-4">
+				<Image
+					src="/logo.svg"
+					alt="Neo Technologies logo"
+					width={40}
+					height={40}
+					className="size-10 shrink-0 invert dark:invert-0"
+				/>
+				<p className="text-muted-foreground text-sm">
+					NeoCut is a product by Neo Technologies and is under the NeoKit line
+					of products, provided for free under the MIT license for all.
+				</p>
 			</div>
 		</div>
 	);
